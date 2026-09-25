@@ -5,7 +5,11 @@ move loose pkgs into their game folder, and replace title IDs (CUSA12345, ...) w
 Usage:
   ps4_rename.py [PATH]              dry run in PATH (default: current directory)
   ps4_rename.py [PATH] --apply      perform the renames (writes rename_undo.log)
-  ps4_rename.py [PATH] --undo       revert renames recorded in rename_undo.log
+  ps4_rename.py [PATH] --undo       revert all renames under PATH recorded in rename_undo.log
+  ps4_rename.py [PATH] --undo-last  preview reverting only the last --apply run (+ --apply to do it)
+  ps4_rename.py [PATH] --undo-match TEXT
+                                    preview reverting only renames whose path contains TEXT
+                                    (+ --apply to do it)
   ps4_rename.py [PATH] --build-db   create/update the db from *.pkg files
 
 --build-db looks up an English name online (English Wikipedia, then Wikidata)
@@ -500,51 +504,173 @@ def migrate_undo_log(root):
     print(f'Moved undo history from {old} to {UNDO_LOG}\n')
 
 
-def undo(root, undo_log, log):
+class NothingToDo(Exception):
+    """Nothing to undo: reported without writing a results log."""
+
+
+def _inside(path, folder):
+    """True when path is strictly inside folder (OS-style case handling)."""
+    return os.path.normcase(path).startswith(os.path.normcase(os.path.join(folder, '')))
+
+
+def _reprefix(path, old, new):
+    """path with its leading folder `old` replaced by `new` (path must be inside old)."""
+    return os.path.join(new, path[len(os.path.join(old, '')):])
+
+
+def read_undo_log(path):
+    """Entries of the undo log in order: dicts with run (group number), header, src, dst, mkdir.
+    Each '#' line (one per --apply run) starts a new group."""
+    entries, run, header = [], 0, None
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            line = line.rstrip('\n')
+            if not line.strip():
+                continue
+            if line.startswith('#'):
+                run, header = run + 1, line
+                continue
+            src, dst = line.split('\t', 1)
+            entries.append({'run': run, 'header': header, 'src': src, 'dst': dst, 'mkdir': src == 'MKDIR'})
+    return entries
+
+
+def write_undo_log(path, entries):
+    """Rewrite the undo log with the given entries, keeping each run's header line."""
+    if not entries:
+        if os.path.exists(path):
+            os.remove(path)
+        return
+    with open(path, 'w', encoding='utf-8') as f:
+        run = None
+        for e in entries:
+            if e['run'] != run:
+                run = e['run']
+                if e['header']:
+                    f.write(e['header'] + '\n')
+            f.write(f"{e['src']}\t{e['dst']}\n")
+
+
+def undo(root, undo_log, log, last=False, match=None, apply=True):
+    """Revert renames under root recorded in the undo log, newest first.
+
+    last:  only the most recent --apply run under root
+    match: only entries whose path (relative to root) contains this text, case-insensitive,
+           plus later renames of the same items so the log stays consistent
+    apply: False = preview only, nothing is changed
+    """
     if not os.path.exists(undo_log):
-        sys.exit(f'No undo log: {undo_log}')
-    with open(undo_log, encoding='utf-8') as f:
-        pairs = [l.rstrip('\n').split('\t') for l in f if l.strip() and not l.startswith('#')]
-    # the log is shared by every PATH the script was run on: only undo entries under this one
-    mine = [p for p in pairs if _under(p[1], root)]
-    others = [p for p in pairs if not _under(p[1], root)]
-    if not mine:
-        sys.exit(f'Nothing to undo under {root} in {undo_log}')
-    failed = []
-    # reverse order: parents renamed last are restored first
-    for src, dst in reversed(mine):
-        if src == 'MKDIR':  # folder created for a loose pkg: remove it once empty again
+        raise NothingToDo(f'No undo log: {undo_log}')
+    entries = read_undo_log(undo_log)
+    n = len(entries)
+    # the log is shared by every PATH the script was run on: only entries under this one
+    cand = [i for i, e in enumerate(entries) if _under(e['dst'], root)]
+    if last and cand:
+        newest = max(entries[i]['run'] for i in cand)
+        cand = [i for i in cand if entries[i]['run'] == newest]
+    sel = set(cand)
+    if match:
+        text = match.lower()
+
+        def rel(p):
+            return os.path.relpath(p, root).lower()
+        sel = {i for i in cand if text in rel(entries[i]['dst'])
+               or (not entries[i]['mkdir'] and text in rel(entries[i]['src']))}
+        # later renames of a selected item (e.g. a second run with/without --keep-id)
+        for j in cand:
+            ej = entries[j]
+            if j in sel or ej['mkdir']:
+                continue
+            for i in sorted(k for k in sel if k < j and not entries[k]['mkdir']):
+                p = entries[i]['dst']
+                for k in range(i + 1, j):
+                    ek = entries[k]
+                    if ek['mkdir']:
+                        continue
+                    if same_path(p, ek['src']):
+                        p = ek['dst']
+                    elif _inside(p, ek['src']):
+                        p = _reprefix(p, ek['src'], ek['dst'])
+                if same_path(p, ej['src']):
+                    sel.add(j)
+                    break
+        # folders created for a selected loose pkg: remove them once empty
+        for i in list(sel):
+            e = entries[i]
+            if not e['mkdir']:
+                for k in cand:
+                    if entries[k]['mkdir'] and entries[k]['run'] == e['run'] \
+                            and same_path(entries[k]['dst'], os.path.dirname(e['dst'])):
+                        sel.add(k)
+    if not sel:
+        raise NothingToDo(f'Nothing to undo under {root}' + (f' matching "{match}"' if match else '')
+                          + f' in {undo_log}')
+
+    undone = set()
+
+    def current(path, i):
+        # where path is now: apply later renames of its parent folders that are still in effect
+        for j in range(i + 1, n):
+            ej = entries[j]
+            if j in undone or ej['mkdir']:
+                continue
+            if _inside(path, ej['src']):
+                path = _reprefix(path, ej['src'], ej['dst'])
+        return path
+
+    tag = '' if apply else '  (preview)'
+    # reverse order: newest first, so folders are renamed back before their files
+    for i in sorted(sel, reverse=True):
+        e = entries[i]
+        if e['mkdir']:  # folder created for a loose pkg: remove it once empty again
+            d = current(e['dst'], i)
+            if not apply:
+                print(f'would remove folder {d} (if empty)')
+                log.change(d, '(folder removed)' + tag)
+                undone.add(i)
+                continue
             try:
-                os.rmdir(lp(dst))
-                print(f'removed folder {dst}')
-                log.change(dst, '(folder removed)')
-            except OSError as e:
-                log.keep(dst, f'created folder not removed: {e.strerror}')
+                os.rmdir(lp(d))
+                print(f'removed folder {d}')
+                log.change(d, '(folder removed)')
+                undone.add(i)
+            except OSError as err:
+                log.keep(d, f'created folder not removed: {err.strerror}')
             continue
-        if not os.path.exists(lp(dst)):
-            log.error(dst, 'renamed item no longer exists')
-            failed.append((src, dst))
-        elif os.path.exists(lp(src)) and not same_file(src, dst):
-            log.keep(dst, f'original name already in use: {src}')
-        else:
+        src, dst = current(e['src'], i), current(e['dst'], i)
+        if apply:
+            if not os.path.exists(lp(dst)):
+                log.error(dst, 'renamed item no longer exists')
+                continue
+            if os.path.exists(lp(src)) and not same_file(src, dst):
+                log.keep(dst, f'original name already in use: {src}')
+                continue
             try:
                 os.rename(lp(dst), lp(src))
-            except OSError as e:
-                log.error(dst, f'restore failed: {e.strerror}')
-                failed.append((src, dst))
+            except OSError as err:
+                log.error(dst, f'restore failed: {err.strerror}')
                 continue
-            print(f'{dst} -> {src}')
-            log.change(dst, src)
-    # keep entries for other folders (and failed ones, to retry); archive the rest
-    with open(undo_log + '.done', 'a', encoding='utf-8') as f:
-        f.write(f'# undone {datetime.now().isoformat()} under {root}\n')
-        f.writelines(f'{s}\t{d}\n' for s, d in mine)
-    keep = others + list(reversed(failed))
-    if keep:
-        with open(undo_log, 'w', encoding='utf-8') as f:
-            f.writelines(f'{s}\t{d}\n' for s, d in keep)
-    else:
-        os.remove(undo_log)
+        print(f'{dst} -> {src}{tag}')
+        log.change(dst, src + tag)
+        undone.add(i)
+        # later entries recorded while this item had its new name now live under the old one
+        for j in range(i + 1, n):
+            ej = entries[j]
+            if j in undone:
+                continue
+            for key in ('src', 'dst'):
+                if ej[key] != 'MKDIR' and _inside(ej[key], e['dst']):
+                    ej[key] = _reprefix(ej[key], e['dst'], e['src'])
+    if not apply:
+        print('\nPreview only. Re-run with --apply to undo.')
+        return
+    # archive what was undone; keep the rest (other folders, unselected and failed entries)
+    if undone:
+        with open(undo_log + '.done', 'a', encoding='utf-8') as f:
+            f.write(f'# undone {datetime.now().isoformat()} under {root}'
+                    + (' (last run)' if last else '') + (f' matching "{match}"' if match else '') + '\n')
+            f.writelines(f"{entries[i]['src']}\t{entries[i]['dst']}\n" for i in sorted(undone))
+    write_undo_log(undo_log, [e for i, e in enumerate(entries) if i not in undone])
 
 
 def rotate_logs(keep=MAX_LOGS):
@@ -645,7 +771,12 @@ def main():
     ap.add_argument('root', nargs='?', default='.', metavar='PATH',
                     help='directory to process (default: current directory)')
     ap.add_argument('--apply', action='store_true', help='perform the renames (default is a dry run)')
-    ap.add_argument('--undo', action='store_true', help='revert renames under PATH recorded in rename_undo.log')
+    ap.add_argument('--undo', action='store_true', help='revert all renames under PATH recorded in rename_undo.log')
+    ap.add_argument('--undo-last', action='store_true',
+                    help='revert only the most recent --apply run under PATH (preview; add --apply to do it)')
+    ap.add_argument('--undo-match', metavar='TEXT',
+                    help='revert only renames whose path contains TEXT, e.g. an ID or a name '
+                         '(preview; add --apply to do it)')
     ap.add_argument('--keep-id', action='store_true', help='keep the ID after the title, e.g. "Bloodborne [CUSA00900]"')
     ap.add_argument('--build-db', action='store_true', help='add games to the db from param.sfo inside *.pkg files')
     ap.add_argument('--rebuild', action='store_true', help='with --build-db: start a fresh db (drops old entries)')
@@ -679,7 +810,14 @@ def main():
         build_db(a.root, a.db, a.rebuild, a.offline)
         return
     migrate_undo_log(a.root)
-    action = 'undo' if a.undo else 'apply' if a.apply else 'dryrun'
+    selective = a.undo_last or a.undo_match is not None
+    if selective and a.undo_match is not None and not a.undo_match.strip():
+        ap.error('--undo-match needs some text')
+    a.undo = a.undo or selective
+    if a.undo:
+        action = 'undo' if (a.apply or not selective) else 'undo-preview'
+    else:
+        action = 'apply' if a.apply else 'dryrun'
     log_path = a.log
     if not log_path:
         base = os.path.join(HERE, f'rename_results_{action}_{datetime.now():%Y%m%d_%H%M%S}')
@@ -690,7 +828,8 @@ def main():
     log = ResultLog(log_path, action)
     try:
         if a.undo:
-            undo(a.root, undo_log, log)
+            undo(a.root, undo_log, log, last=a.undo_last, match=a.undo_match,
+                 apply=a.apply or not selective)  # plain --undo acts at once, as before
         else:
             db = load_db(a.db) if os.path.exists(a.db) else {}
             new = missing_ids(a.root, db)
@@ -701,9 +840,13 @@ def main():
                 db = load_db(a.db)
                 print()
             rename_all(a.root, db, a.keep_id, a.apply, undo_log, log)
+    except NothingToDo as e:
+        log = None
+        sys.exit(str(e))
     finally:
-        log.write()
-        rotate_logs(a.keep_logs)
+        if log:
+            log.write()
+            rotate_logs(a.keep_logs)
 
 
 if __name__ == '__main__':
