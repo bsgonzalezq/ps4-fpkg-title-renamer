@@ -115,7 +115,7 @@ python3 ps4_rename.py .. --apply
 python3 ps4_rename.py .. --undo
 ```
 
-`ps4_titles.db`, the results logs and `rename_undo.log` are kept in `PATH`, so they stay with your games. If `PATH` has no `ps4_titles.db`, the one next to the script is used.
+The results logs and `rename_undo.log` are kept in `PATH`, so they stay with your games. The db is read from `PATH/ps4_titles.db`, or from the `ps4_titles.db` next to the script if `PATH` has none. A new db is created in `PATH`.
 
 Optional: to run it as just `ps4_rename.py` from anywhere, run this from the script's folder to link it into your PATH:
 
@@ -160,7 +160,7 @@ CHTM00777|PS4 Cheats Manager|HB
 - **Automatic updates:** a normal run checks every base and patch PKG first. If an ID isn't in the db, or there's no db yet, it runs `--build-db` before renaming. So new games are picked up without running `--build-db` yourself. Use `--no-auto-db` to turn this off.
 - **Where titles come from:** the title is taken from the base game PKG. If there isn't one, the patch PKG is used, since it holds the game title too. DLC PKGs only hold the DLC's own name. An ID with only DLC, or only a folder name, is reported as not in the db and has to be added by hand.
 
-The `ps4_titles.db` in this repo is an example generated from a real collection.
+`ps4_titles.db` isn't part of the repo and is listed in `.gitignore`. It's created on the first run and grows as new games are found. Because git ignores it, it's safe to keep next to the script in a clone, and `git pull` never conflicts with it.
 
 ### English names for non-English titles
 

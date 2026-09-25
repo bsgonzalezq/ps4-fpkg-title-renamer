@@ -3,3 +3,4 @@ __pycache__/
 rename_results_*.log
 rename_undo.log*
 *.pkg
+ps4_titles.db
