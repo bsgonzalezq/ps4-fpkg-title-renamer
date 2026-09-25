@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Replace PS4 title IDs (CUSA12345, CHTM00777, ...) in file/dir names with game titles.
+"""Rename PS4 pkgs to <ID>_base / _patch / _<DLC title>_dlc .pkg (type read from param.sfo),
+move loose pkgs into their game folder, and replace title IDs (CUSA12345, ...) with game titles.
 
 Usage:
   ps4_rename.py [PATH]              dry run in PATH (default: current directory)
@@ -252,39 +253,49 @@ def new_name(name, db, keep_id, unknown):
     return BARE_ID_RE.sub(sub, TAG_RE.sub(tag, name)).rstrip(' .')
 
 
-def pkg_name(name, path, db, keep_id):
-    """Name for a .pkg whose file name has no game ID, using the ID from its param.sfo.
+PKG_KINDS = {'gd': 'base', 'gde': 'base', 'gp': 'patch', 'ac': 'dlc'}   # param.sfo CATEGORY
 
-    Returns (new_name, reason); new_name is None when the file should stay as-is.
-    """
+
+def strip_prefix(text, prefix):
+    """Remove prefix from text, comparing letters/digits only ("ELDEN RING™ X" - "ELDEN RING" = "X")."""
+    key = _alnum(prefix)
+    if not key or not _alnum(text).startswith(key):
+        return text
+    count, i = 0, 0
+    while i < len(text) and count < len(key):
+        count += len(_alnum(text[i]))
+        i += 1
+    return text[i:]
+
+
+def pkg_info(path):
+    """Return (title_id, kind, dlc_title) from a pkg's param.sfo, or None if unreadable/unknown."""
     try:
         r = read_sfo(path)
-    except (OSError, ValueError, struct.error) as e:
-        return None, f'no game ID in name, could not read pkg: {e}'
+    except (OSError, ValueError, struct.error):
+        return None
     if not r:
-        return None, 'no game ID in name, not a PS4 pkg'
+        return None
     cid, sfo = r
+    kind = PKG_KINDS.get(sfo.get('CATEGORY'))
+    if not kind:
+        return None
     gid = sfo.get('TITLE_ID') or cid[7:16]
-    if gid not in db:
-        return None, f'ID {gid} (from pkg) not in db'
-    title = safe_title(db, gid)
-    stem, ext = os.path.splitext(name)
-    stem = re.sub(r'\s+', ' ', stem.translate(BAD)).strip(' .')
-    key, stem_key = _alnum(title), _alnum(stem)
-    if key and key in stem_key:
-        if not keep_id:
-            return None, f'title already in name ({gid} from pkg)'
-        if stem_key.startswith(key):
-            # put the ID right after the title: "Dead Cells [CUSA11253] - The Bad Seed"
-            count, i = 0, 0
-            while i < len(stem) and count < len(key):
-                count += len(_alnum(stem[i]))
-                i += 1
-            return f'{stem[:i]} [{gid}]{stem[i:]}{ext}', ''
-        return f'{stem} [{gid}]{ext}', ''
-    # title missing: prefix it, e.g. "Pre-order.pkg" -> "FANTASY LIFE i ... - Pre-order.pkg"
-    tagged = f'{title} [{gid}]' if keep_id else title
-    return f'{tagged} - {stem}{ext}', ''
+    dlc = (sfo.get('TITLE_01') or sfo.get('TITLE') or cid[20:]) if kind == 'dlc' else ''
+    return gid, kind, dlc
+
+
+def pkg_name(info, db, keep_id, unknown):
+    """File name in the <TITLE_ID>_base / _patch / _<DLC title>_dlc .pkg scheme, with the ID
+    then replaced by the game title as for any other name."""
+    gid, kind, dlc = info
+    if kind != 'dlc':
+        return new_name(f'{gid}_{kind}.pkg', db, keep_id, unknown)
+    dlc = re.sub(r'\s+', ' ', dlc.translate(BAD)).strip()
+    if gid in db:
+        # drop the game title from the DLC title, the name already starts with it
+        dlc = strip_prefix(dlc, safe_title(db, gid)).strip(' -–_.') or dlc
+    return new_name(f'{gid}_{dlc}_dlc.pkg', db, keep_id, unknown)
 
 
 class ResultLog:
@@ -316,8 +327,23 @@ class ResultLog:
               f'errors: {len(self.errors)}\nLog: {self.path}')
 
 
+def game_dir(root, gid, db, keep_id, planned):
+    """Folder in root for a loose pkg: an existing folder for the ID, else a new one."""
+    if gid in planned:  # already being created in this run
+        return planned[gid], False
+    wanted = new_name(gid, db, keep_id, set())
+    names = [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)) and d not in SKIP]
+    for d in names:  # "CUSA00900", "Bloodborne [CUSA00900]", ...
+        if gid in ID_RE.findall(d):
+            return d, False
+    if wanted in names:  # "Bloodborne" (renamed without --keep-id)
+        return wanted, False
+    planned[gid] = wanted
+    return wanted, True
+
+
 def rename_all(root, db, keep_id, apply, undo_log, log):
-    unknown, done = set(), []
+    unknown, done, planned = set(), [], {}
     own = {'ps4_titles.db', 'ps4_rename.py', os.path.basename(undo_log)}
     # bottom-up so files are renamed before their parent directories
     for dp, dns, fns in os.walk(root, topdown=False):
@@ -329,32 +355,39 @@ def rename_all(root, db, keep_id, apply, undo_log, log):
                 continue
             relpath = os.path.normpath(os.path.join(rel, name))
             missing = set()
-            if ID_RE.search(name):
+            info = pkg_info(os.path.join(dp, name)) if name in fns and name.lower().endswith('.pkg') else None
+            if info:
+                # PS4 pkg: name it from its param.sfo, <ID>_base / _patch / _<DLC>_dlc .pkg
+                nn = pkg_name(info, db, keep_id, missing)
+                reason = f'ID {info[0]} (from pkg) not in db' if missing else 'already named'
+            elif ID_RE.search(name):
                 nn = new_name(name, db, keep_id, missing)
                 reason = ('ID not in db: ' + ', '.join(sorted(missing))) if missing else 'already named'
-            elif name.lower().endswith('.pkg') and name in fns:
-                # no ID in the file name: take it from the pkg's param.sfo
-                nn, reason = pkg_name(name, os.path.join(dp, name), db, keep_id)
-                nn = nn or name
             else:
                 nn, reason = name, 'no game ID in name'
             unknown |= missing
-            if nn == name:
+            # a pkg sitting directly in root goes into its game's folder
+            subdir, create = game_dir(root, info[0], db, keep_id, planned) if info and dp == root else ('', False)
+            if nn == name and not subdir:
                 log.keep(relpath, reason)
                 continue
-            src, dst = os.path.join(dp, name), os.path.join(dp, nn)
+            src, dst = os.path.join(dp, name), os.path.join(dp, subdir, nn)
+            target = os.path.join(subdir, nn) if subdir else nn
             if os.path.exists(dst):
-                log.error(relpath, f'target already exists: {nn}')
+                log.error(relpath, f'target already exists: {target}')
                 continue
-            print(f'{relpath}  ->  {nn}')
+            print(f'{relpath}  ->  {target}' + (f'   (new folder "{subdir}")' if create else ''))
             if apply:
                 try:
+                    if create:
+                        os.mkdir(os.path.join(root, subdir))
+                        done.append(('MKDIR', os.path.join(root, subdir)))
                     os.rename(src, dst)
                 except OSError as e:
-                    log.error(relpath, f'rename to "{nn}" failed: {e.strerror}')
+                    log.error(relpath, f'rename to "{target}" failed: {e.strerror}')
                     continue
                 done.append((src, dst))
-            log.change(relpath, nn)
+            log.change(relpath, target + (f'  (new folder "{subdir}")' if create else ''))
     if apply and done:
         with open(undo_log, 'a', encoding='utf-8') as f:
             f.write(f'# {datetime.now().isoformat()}\n')
@@ -373,6 +406,14 @@ def undo(undo_log, log):
         pairs = [l.rstrip('\n').split('\t') for l in f if l.strip() and not l.startswith('#')]
     # reverse order: parents renamed last are restored first
     for src, dst in reversed(pairs):
+        if src == 'MKDIR':  # folder created for a loose pkg: remove it once empty again
+            try:
+                os.rmdir(dst)
+                print(f'removed folder {dst}')
+                log.change(dst, '(folder removed)')
+            except OSError as e:
+                log.keep(dst, f'created folder not removed: {e.strerror}')
+            continue
         if not os.path.exists(dst):
             log.error(dst, 'renamed item no longer exists')
         elif os.path.exists(src):

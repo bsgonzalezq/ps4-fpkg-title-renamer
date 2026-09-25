@@ -1,17 +1,21 @@
 # ps4-title-renamer
 
-Renames PS4 game folders and files named after title IDs (`CUSA00900`, `CHTM00777`, ...) to the game's title.
+Renames PS4 PKG files to a consistent `<ID>_base` / `_patch` / `_<DLC>_dlc` scheme, puts each game in its own folder, and replaces title IDs (`CUSA00900`, `CHTM00777`, ...) with the game's title.
 
 ```
-CUSA00900/                          Bloodborne/
-├── CUSA00900_base.pkg      ->      ├── Bloodborne_base.pkg
-└── CUSA00900_patch.pkg             └── Bloodborne_patch.pkg
+CUSA00900/                                   Bloodborne/
+├── CUSA00900_base.pkg                ->     ├── Bloodborne_base.pkg
+├── update.pkg                               ├── Bloodborne_patch.pkg
+└── Bloodborne The Old Hunters.pkg           └── Bloodborne_The Old Hunters_dlc.pkg
+CUSA11253_base.pkg  (loose in root)          Dead Cells/
+                                             └── Dead Cells_base.pkg
 ```
 
 - Reads titles directly from the `param.sfo` inside each `.pkg`, so no guessing or online title-ID database is needed
 - Looks up English names online for Japanese / Korean / Chinese titles
 - Dry run by default, with a results log and a one-command undo
-- PKGs without an ID in their name (DLC, add-ons) are identified from their `param.sfo` too
+- Base game, patch or DLC is detected from each PKG's `param.sfo`, not from the file name
+- Loose PKGs in the top folder are moved into their game's folder, which is created if needed
 - Safe to run again: already-renamed items are left alone
 - Output names are safe for exFAT/NTFS drives
 
@@ -168,16 +172,28 @@ CUSA32997: 怒首領蜂大往生 臨廻転生   ->  DoDonPachi DaiOuJou
 - If nothing is found, the original title is kept.
 - Requests are limited to about one per second to respect Wikimedia's rate limits.
 
-## PKGs without an ID in the name
+## Naming scheme
 
-DLC and add-on PKGs are often named without an ID, like `Pre-order.pkg`. For these, the script reads the title ID from the PKG's own `param.sfo`, looks up the game title in the db, and adds it to the name:
+Every PS4 PKG is named from its own `param.sfo`, whatever it's currently called:
 
-| File | Default | `--keep-id` |
-|---|---|---|
-| `Pre-order.pkg` (title missing) | `FANTASY LIFE i - The Girl Who Steals Time - Pre-order.pkg` | `FANTASY LIFE i - The Girl Who Steals Time [CUSA52673] - Pre-order.pkg` |
-| `Dead Cells - The Bad Seed.pkg` (title present) | unchanged | `Dead Cells [CUSA11253] - The Bad Seed.pkg` |
+| `CATEGORY` in param.sfo | Type | Name before titles | Final name (default) | Final name (`--keep-id`) |
+|---|---|---|---|---|
+| `gd`, `gde` | base game / app | `CUSA00900_base.pkg` | `Bloodborne_base.pkg` | `Bloodborne [CUSA00900]_base.pkg` |
+| `gp` | patch | `CUSA00900_patch.pkg` | `Bloodborne_patch.pkg` | `Bloodborne [CUSA00900]_patch.pkg` |
+| `ac` | DLC / add-on | `CUSA00900_<DLC title>_dlc.pkg` | `Bloodborne_The Old Hunters_dlc.pkg` | `Bloodborne [CUSA00900]_The Old Hunters_dlc.pkg` |
 
-Other files without an ID, such as logs, are left alone.
+- **DLC names:** the DLC title comes from the DLC PKG's `param.sfo`. If it starts with the game title, that part is dropped because the name already starts with it: "Bloodborne The Old Hunters" becomes `…_The Old Hunters_dlc.pkg`.
+- **Folders:** folders and other files with an ID in their name get the ID replaced by the title, e.g. `CUSA00900/` becomes `Bloodborne/`.
+- **Other files:** files that aren't PS4 PKGs and have no ID, such as logs, are left alone.
+- **Duplicate names:** two patches for the same game in one folder would both become `_patch.pkg`. The second one is logged as an error and left as it is.
+
+### Loose PKGs in the top folder
+
+A PKG directly in `PATH`, rather than in a game folder, is moved into its game's folder:
+
+- **Existing folder:** if one exists for that ID, like `CUSA00900/`, `Bloodborne [CUSA00900]/` or `Bloodborne/`, the PKG is moved there.
+- **New folder:** otherwise a folder is created, named like the other game folders: `Bloodborne/`, or `Bloodborne [CUSA00900]/` with `--keep-id`.
+- **Undo:** `--undo` moves the PKG back and removes any folder it created.
 
 ## Running again
 
@@ -195,7 +211,7 @@ Every run except `--build-db` writes `rename_results_<dryrun|apply|undo>_<timest
 CUSA00900/CUSA00900_base.pkg  ->  Bloodborne_base.pkg
 === NOT CHANGED (39) ===
 itemzflow/daemon.log  (no game ID in name)
-Dead Cells [CUSA11253]/Dead Cells - The Bad Seed.pkg  (title already in name (CUSA11253 from pkg))
+Bloodborne [CUSA00900]/Bloodborne [CUSA00900]_base.pkg  (already named)
 CUSA99999  (ID not in db: CUSA99999)
 === ERRORS (1) ===
 CUSA00900/CUSA00900_patch.pkg  (target already exists: Bloodborne_patch.pkg)
