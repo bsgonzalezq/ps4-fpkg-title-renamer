@@ -21,9 +21,10 @@ Name style (for a rename run; a later run with other options re-styles everythin
   --add-version      version tag              Bloodborne [v1.09] [patch].pkg
   --add-content-id   content ID tag           Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [patch].pkg
   --no-type          no type tag              Bloodborne [v1.09].pkg
+  --add-region       region tag after title   Bloodborne [CUSA00900] [USA] [patch].pkg
   --sep SEP          SEP instead of spaces    --sep _ : Bloodborne_[CUSA00900]_[v1.09]_[patch].pkg
   --no-brackets      tags without [ ]         Bloodborne CUSA00900 v1.09 patch.pkg
-  Folders get <game> only; version, content ID and type go on .pkg files.
+  Folders get <game> (+ region); version, content ID and type go on .pkg files.
 
 --build-db looks up an English name online (English Wikipedia, then Wikidata)
 for any title in Japanese/Korean/Chinese and stores it in the db.
@@ -40,7 +41,10 @@ anywhere else, it creates ./ps4-pkg-title-renamer and moves there.
 
 Works on Linux, macOS and Windows 10/11 (use `py` or `python` instead of `python3`).
 
-DB format (plain text, one per line, '#' comments):  ID|Title|Region
+DB (ps4_titles.db, plain text, '#' comments; edits are kept, --build-db --rebuild starts over):
+  GAMES:  TitleID|Title|Region                          CUSA00900|Bloodborne™|USA
+  PKGS:   ContentID|Version|Type|TitleID|DLC title      UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunters
+  Game titles and DLC titles are used for names; edit them to rename.
 """
 import argparse, json, os, platform, re, shutil, struct, subprocess, sys, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
@@ -110,15 +114,37 @@ def windows_safe(name):
     return name
 
 
+class TitleDB(dict):
+    """The title db: {title_id: (title, region)} plus .pkgs, one entry per pkg file:
+    {(content_id, type, version): (title_id, dlc_title)}."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.pkgs = {}
+
+    def dlc_title(self, cid):
+        """DLC title stored for a DLC content ID (any version), or None."""
+        for (c, kind, _), (_, title) in self.pkgs.items():
+            if c == cid and kind == 'dlc' and title:
+                return title
+        return None
+
+
 def load_db(path):
-    db = {}
+    """Read the db. Lines with 3 fields are games (TitleID|Title|Region), lines with 5 fields
+    are pkgs (ContentID|Version|Type|TitleID|DLC title); older dbs only have game lines."""
+    db = TitleDB()
     with open(path, encoding='utf-8') as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
-            gid, title, region = (p.strip() for p in line.split('|', 2))
-            db[gid.upper()] = (title, region)
+            parts = [p.strip() for p in line.split('|')]
+            if len(parts) >= 5:
+                cid, ver, kind, gid = parts[:4]
+                db.pkgs[(cid, kind, ver)] = (gid.upper(), '|'.join(parts[4:]))
+            elif len(parts) >= 3:
+                db[parts[0].upper()] = ('|'.join(parts[1:-1]), parts[-1])
     return db
 
 
@@ -215,6 +241,17 @@ def http_json(url, params):
     return {}
 
 
+NOT_A_GAME = re.compile(r'develop|design|publish|compan|studio|business|corporat|person|composer|'
+                        r'director|producer|artist|writer|actor|voice|musician|character|franchise|series|engine',
+                        re.I)
+
+
+def _is_game(description):
+    """Wikipedia/Wikidata short description of a video game (not its studio, people, series...)."""
+    d = description or ''
+    return bool(re.search(r'\bgame\b', d, re.I)) and not NOT_A_GAME.search(d)
+
+
 def search_english(query):
     """Find the English name of a game from its Japanese/Korean/Chinese name, or None."""
     lang = 'ko' if re.search(r'[가-힯]', query) else 'ja'
@@ -225,7 +262,7 @@ def search_english(query):
             'prop': 'description', 'format': 'json', 'formatversion': 2})
         pages = sorted(r.get('query', {}).get('pages', []), key=lambda p: p.get('index', 99))
         for p in pages:
-            if 'game' in p.get('description', '').lower():
+            if _is_game(p.get('description')):
                 return p['title']
         # Wikidata: search the native-language label, return the English label
         r = http_json('https://www.wikidata.org/w/api.php', {
@@ -233,7 +270,7 @@ def search_english(query):
             'uselang': 'en', 'type': 'item', 'limit': 5, 'format': 'json'})
         for item in r.get('search', []):
             label = item.get('label', '')
-            if 'game' in item.get('description', '').lower() and label and not is_foreign(label):
+            if _is_game(item.get('description')) and label and not is_foreign(label):
                 return label
     except (urllib.error.URLError, OSError, ValueError) as e:
         print(f'    lookup failed for "{query}": {e}', file=sys.stderr)
@@ -260,9 +297,11 @@ def translate_title(title):
     # falling back to single words when a multi-word part isn't found
     parts = []
     for seg in sorted(segments, key=len, reverse=True):
+        if len(seg.replace(' ', '')) < 2:  # a single character matches almost anything
+            continue
         hit = search_english(seg) if seg != t else None
         if not hit and ' ' in seg:
-            hits = [search_english(w) for w in sorted(seg.split(), key=len, reverse=True)]
+            hits = [search_english(w) for w in sorted(seg.split(), key=len, reverse=True) if len(w) >= 2]
             hit = next((h for h in hits if h), None)
         if hit:
             parts.append(hit)
@@ -277,15 +316,27 @@ def translate_title(title):
 
 
 def write_db(db, path):
+    pkgs = getattr(db, 'pkgs', {})
     with open(path, 'w', encoding='utf-8') as f:
-        f.write('# PS4 title DB: ID|Title|Region  (USA/EUR/JPN/ASIA, HB = homebrew)\n')
+        f.write('# PS4 title DB  (edit titles freely: your edits are kept; --build-db --rebuild starts over)\n')
+        f.write('# GAMES: TitleID|Title|Region  (USA/EUR/JPN/ASIA/KOR, HB = homebrew)\n')
         for gid in sorted(db):
             f.write(f'{gid}|{db[gid][0]}|{db[gid][1]}\n')
+        f.write('\n# PKGS: ContentID|Version|Type|TitleID|DLC title  (one line per pkg file and version;\n'
+                '#   type/version come from the pkg; the DLC title is used for [dlc] names)\n')
+        for (cid, kind, ver) in sorted(pkgs, key=lambda k: (pkgs[k][0], k[1] != 'base', k[1], k[0], k[2])):
+            gid, dlc = pkgs[(cid, kind, ver)]
+            f.write(f'{cid}|{ver}|{kind}|{gid}|{dlc}\n')
 
 
 def translate_db(db, offline):
-    """Replace non-English titles in db with English names found online."""
+    """Replace non-English game titles in db with English names found online.
+    DLC titles aren't looked up (searches return the base game, its studio or people, not the
+    DLC); they're kept as in the pkg and can be edited in the db's PKGS section."""
     foreign = [g for g in sorted(db) if is_foreign(db[g][0])]
+    dlcs = sum(1 for v in getattr(db, 'pkgs', {}).values() if is_foreign(v[1]))
+    if dlcs:
+        print(f'{dlcs} non-English DLC title(s) kept as in the pkg (edit them in the db to rename)')
     if not foreign:
         return
     if offline:
@@ -303,8 +354,9 @@ def translate_db(db, offline):
 
 
 def build_db(root, path, rebuild=False, offline=False):
-    db = load_db(path) if os.path.exists(path) and not rebuild else {}
+    db = load_db(path) if os.path.exists(path) and not rebuild else TitleDB()
     found = {}  # gid -> (priority, title, content_id); base game/app beats patch
+    new_pkgs = 0
     bad = 0
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if d not in SKIP]
@@ -312,21 +364,26 @@ def build_db(root, path, rebuild=False, offline=False):
             if not fn.lower().endswith('.pkg'):
                 continue
             try:
-                r = read_sfo(os.path.join(dp, fn))
+                cid, sfo = read_sfo(os.path.join(dp, fn))
             except NotPkg:
-                r = None
+                continue
             except SfoError as e:
                 bad += 1
                 print(f'  ! {os.path.relpath(os.path.join(dp, fn), root)}: {e}', file=sys.stderr)
-                r = None
-            # base games/apps; patches carry the game title too, used when no base pkg is present
-            prio = {'gd': 0, 'gde': 0, 'gp': 1}.get(r[1].get('CATEGORY')) if r else None
-            if prio is None:
                 continue
-            cid, sfo = r
-            gid = sfo.get('TITLE_ID', cid[7:16])
-            if gid in db:
-                continue  # keep existing (possibly hand-edited) entries
+            kind = PKG_KINDS.get(sfo.get('CATEGORY'))
+            if not kind:
+                continue
+            gid, _, dlc, ver, pcid = _pkg_tuple(cid, sfo, kind)
+            # one line per pkg file and version; existing (possibly hand-edited) lines are kept
+            if (pcid, kind, ver) not in db.pkgs:
+                db.pkgs[(pcid, kind, ver)] = (gid, db.dlc_title(pcid) or dlc if kind == 'dlc' else '')
+                new_pkgs += 1
+                print(f'  + {pcid}|{ver}|{kind}|{gid}|{db.pkgs[(pcid, kind, ver)][1]}')
+            # game titles from base games/apps; patches carry the game title too (used when no base)
+            prio = {'base': 0, 'patch': 1}.get(kind)
+            if prio is None or gid in db:
+                continue
             title = sfo.get('TITLE_01') or sfo.get('TITLE', gid)  # prefer English title
             if gid not in found or prio < found[gid][0]:
                 found[gid] = (prio, title, cid)
@@ -336,27 +393,36 @@ def build_db(root, path, rebuild=False, offline=False):
         print(f'  + {gid}|{title}|{region}')
     translate_db(db, offline)
     write_db(db, path)
-    print(f'{len(found)} new entries, {len(db)} total -> {path}')
+    print(f'{len(found)} new game(s), {new_pkgs} new pkg(s); {len(db)} games, {len(db.pkgs)} pkgs -> {path}')
     if bad:
         print(f'{bad} pkg(s) could not be read (see "!" lines above)')
 
 
 def missing_ids(root, db):
-    """Title IDs of base/patch pkgs in PATH that aren't in db yet (the ones --build-db can add)."""
-    ids = set()
+    """What --build-db could add: title IDs of base/patch pkgs not in db, plus pkgs
+    (content ID, type, version) not recorded yet. Returns (ids, pkg_count)."""
+    ids, pkgs = set(), 0
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if d not in SKIP]
         for fn in fns:
             if fn.lower().endswith('.pkg'):
                 info = pkg_info(os.path.join(dp, fn))
-                if info and info[1] != 'dlc':
-                    ids.add(info[0])
-    return ids - set(db)
+                if not info:
+                    continue
+                gid, kind, _, ver, cid = info
+                if kind != 'dlc' and gid not in db:
+                    ids.add(gid)
+                if (cid, kind, ver) not in db.pkgs:
+                    pkgs += 1
+    return ids, pkgs
 
 
 # a title ID in a name, bare or as a "[CUSA00900]" tag; not the one inside a content ID
 # ("UP9000-CUSA00900_00-...")
 ANY_ID_RE = re.compile(r'(\[)?(?<![A-Za-z0-9])([A-Z]{4}\d{5})(?(1)\])(?![0-9])(?!_\d\d-)')
+REGION_TAGS = ('USA', 'EUR', 'JPN', 'ASIA', 'KOR', 'HB')
+# a region tag (from --add-region) right at the start of the text: " [USA]", "_USA", ...
+REGION_RE = re.compile(r'[\s._-]*(\[)?(?:' + '|'.join(REGION_TAGS) + r')(?(1)\])(?![A-Za-z0-9])')
 
 
 def _alnum(s):
@@ -377,12 +443,14 @@ class Style:
     sep          replaces the spaces in generated names   ' ' (default), '_', '.', '' ...
     brackets     put tags in [ ]
     no_type      leave out the type tag                   [base] / [patch] / [dlc]
+    add_region   region tag after the title/ID            [USA]
     """
 
     def __init__(self, keep_id=False, add_version=False, add_cid=False, no_title=False,
-                 sep=' ', brackets=True, no_type=False):
+                 sep=' ', brackets=True, no_type=False, add_region=False):
         self.keep_id, self.add_version, self.add_cid = keep_id, add_version, add_cid
         self.no_title, self.sep, self.brackets, self.no_type = no_title, sep, brackets, no_type
+        self.add_region = add_region
 
     def tag(self, text):
         return f'[{text}]' if self.brackets else text
@@ -394,11 +462,15 @@ class Style:
         return self.sep.join(p for p in parts if p)
 
     def game(self, db, gid):
-        """The game part of a name: "Bloodborne", "Bloodborne [CUSA00900]" or "CUSA00900"."""
-        if self.no_title or gid not in db:
+        """The game part of a name: "Bloodborne", "Bloodborne [CUSA00900]", "CUSA00900",
+        each optionally followed by a region tag ("[USA]")."""
+        if gid not in db:
             return gid
+        region = db[gid][1] if self.add_region and db[gid][1] in REGION_TAGS else ''
+        if self.no_title:
+            return self.join(gid, self.tag(region) if region else '')
         title = self.spaced(safe_title(db, gid))
-        return self.join(title, self.tag(gid)) if self.keep_id else title
+        return self.join(title, self.tag(gid) if self.keep_id else '', self.tag(region) if region else '')
 
 
 def cut_title(text, title):
@@ -431,6 +503,9 @@ def new_name(name, db, style, unknown):
         cur = out + before
         cut = cut_title(cur, safe_title(db, gid))
         out = (cur if cut is None else cut) + style.game(db, gid)
+        r = REGION_RE.match(name, pos)  # an old region tag after the ID is replaced too
+        if r and r.end() > pos:
+            pos = r.end()
     return windows_safe(out + name[pos:])
 
 
@@ -495,6 +570,8 @@ def pkg_name(info, db, style, unknown):
         unknown.add(gid)
     head = style.game(db, gid)
     if kind == 'dlc':
+        # the db's DLC title (translated or edited) wins over the one in the pkg
+        dlc = (db.dlc_title(cid) if hasattr(db, 'dlc_title') else None) or dlc
         d = re.sub(r'\s+', ' ', dlc.translate(BAD)).strip()
         if gid in db and not style.no_title:
             # drop the game title from the DLC title, the name already starts with it
@@ -536,6 +613,9 @@ def folder_name(name, path, db, style, unknown):
     if not gid or gid not in db or not _alnum(name).startswith(_alnum(safe_title(db, gid)) or '\0'):
         return name, 'no game ID in name'
     rest = strip_prefix(name, safe_title(db, gid))
+    r = REGION_RE.match(rest)  # an old region tag is re-added (or not) by style.game
+    if r and r.end():
+        rest = rest[r.end():]
     return windows_safe(style.game(db, gid) + rest), 'already named'
 
 
@@ -966,6 +1046,8 @@ def main():
                          '(default: space; "" for none)')
     ap.add_argument('--no-brackets', action='store_true',
                     help='write tags without [ ], e.g. "Bloodborne CUSA00900 v1.09 patch.pkg"')
+    ap.add_argument('--add-region', action='store_true',
+                    help='add the region tag after the title/ID, e.g. "Bloodborne [CUSA00900] [USA]"')
     ap.add_argument('--no-type', action='store_true',
                     help='leave out the [base] / [patch] / [dlc] tag, e.g. "Bloodborne [v1.09].pkg"')
     ap.add_argument('--build-db', action='store_true', help='add games to the db from param.sfo inside *.pkg files')
@@ -985,7 +1067,8 @@ def main():
         ap.error('--keep-logs must be 0 or more')
     if any(c in '\\/:*?"<>|' or ord(c) < 32 for c in a.sep):
         ap.error('--sep can\'t contain \\ / : * ? " < > | or control characters')
-    style = Style(a.keep_id, a.add_version, a.add_content_id, a.no_title, a.sep, not a.no_brackets, a.no_type)
+    style = Style(a.keep_id, a.add_version, a.add_content_id, a.no_title, a.sep, not a.no_brackets, a.no_type,
+                  a.add_region)
     a.root = os.path.abspath(a.root)
     if not os.path.isdir(a.root):
         ap.error(f'not a directory: {a.root}')
@@ -1024,11 +1107,13 @@ def main():
             undo(a.root, undo_log, log, last=a.undo_last, match=a.undo_match,
                  apply=a.apply or not selective)  # plain --undo acts at once, as before
         else:
-            db = load_db(a.db) if os.path.exists(a.db) else {}
-            new = missing_ids(a.root, db)
-            if not a.no_auto_db and (new or not db):
-                # new games found: add them to the db first (same as --build-db)
-                print(f'{len(new)} ID(s) not in db: {", ".join(sorted(new))}\nRunning --build-db...')
+            db = load_db(a.db) if os.path.exists(a.db) else TitleDB()
+            new, new_pkgs = missing_ids(a.root, db)
+            if not a.no_auto_db and (new or new_pkgs or not db):
+                # new games / pkgs found: add them to the db first (same as --build-db)
+                what = [f'{len(new)} game ID(s) ({", ".join(sorted(new))})' if new else '',
+                        f'{new_pkgs} pkg(s)' if new_pkgs else '']
+                print(f'Not in db yet: {" and ".join(w for w in what if w) or "no db"}\nRunning --build-db...')
                 build_db(a.root, a.db, offline=a.offline)
                 db = load_db(a.db)
                 print()

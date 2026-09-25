@@ -161,6 +161,7 @@ Re-run the link command if you move the script.
 | `--add-version` | Add the PKG version to `.pkg` names: `Bloodborne [v1.09] [patch].pkg` |
 | `--add-content-id` | Add the content ID to `.pkg` names: `Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [base].pkg` |
 | `--no-type` | Leave out the `[base]` / `[patch]` / `[dlc]` tag: `Bloodborne [v1.09].pkg` |
+| `--add-region` | Add the region tag after the title/ID: `Bloodborne [CUSA00900] [USA] [patch].pkg` |
 | `--sep SEP` | Use `SEP` instead of spaces in generated names: `--sep _` gives `Grand_Theft_Auto_V_[patch].pkg`. `""` means no separator |
 | `--no-brackets` | Write tags without `[ ]`: `Bloodborne CUSA00900 v1.09 patch.pkg` |
 | `--build-db` | Add games to the db from the `.pkg` files in `PATH` |
@@ -175,22 +176,57 @@ Re-run the link command if you move the script.
 
 ## Title database
 
-`ps4_titles.db` is plain text with one game per line, and you can edit it by hand:
+`ps4_titles.db` is a plain-text file next to the script. It has two sections, and you can edit both by hand:
 
 ```
-# ID|Title|Region
+# GAMES: TitleID|Title|Region
 CUSA00900|Bloodborne™|USA
 CUSA07439|DARK SOULS™ III|EUR
 CUSA10207|Battle Garegga Rev.2016|ASIA
 CHTM00777|PS4 Cheats Manager|HB
+
+# PKGS: ContentID|Version|Type|TitleID|DLC title
+UP9000-CUSA00900_00-BLOODBORNE000000|01.00|base|CUSA00900|
+UP9000-CUSA00900_00-BLOODBORNE000000|01.09|patch|CUSA00900|
+UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunters
 ```
 
-- **Title** comes from the PKG's `param.sfo`. The English localized title (`TITLE_01`) is used when the PKG has one.
-- **Region** comes from the content ID prefix: `UP` = USA, `EP` = EUR, `JP` = JPN, `HP` = ASIA, `KP` = KOR. Homebrew is marked `HB`.
-- The db is always `ps4_titles.db` next to the script. `--db FILE` overrides this. A `ps4_titles.db` left in `PATH` by older versions is merged into it automatically and then removed.
-- `--build-db` only adds games that aren't in the db yet, so your manual edits are kept. Use `--rebuild` to start over.
-- **Automatic updates:** a normal run checks every base and patch PKG first. If an ID isn't in the db, or there's no db yet, it runs `--build-db` before renaming. So new games are picked up without running `--build-db` yourself. Use `--no-auto-db` to turn this off.
-- **Where titles come from:** the title is taken from the base game PKG. If there isn't one, the patch PKG is used, since it holds the game title too. DLC PKGs only hold the DLC's own name. An ID with only DLC, or only a folder name, is reported as not in the db and has to be added by hand.
+### Why keep a db?
+
+Every run reads each PKG's `param.sfo` anyway, so the db isn't a speed-up. It's there for things the PKGs alone can't give you:
+
+| The db | Without it |
+|---|---|
+| Remembers English names found online for Japanese/Korean titles | Every run would repeat the online lookups: slower, rate-limited, and needs internet |
+| Keeps your fixes: edit a game or DLC title and every run uses it | No way to change a name without editing the script |
+| Keeps game titles for folders with only DLC, or no PKGs | DLC PKGs only contain the DLC's own name, so the game title would be unknown |
+| Gives one title per game, taken from the base game, for all its files | Patch PKGs sometimes word the title differently |
+| Holds the region used by `--add-region` | |
+| Records every PKG you have, with content ID, version and type | |
+
+### GAMES section
+
+- **Title:** comes from the PKG's `param.sfo`. The English localized title (`TITLE_01`) is used when the PKG has one. The title is taken from the base game PKG, or from a patch if there's no base game. Edit it to rename the game everywhere.
+- **Region:** comes from the content ID prefix: `UP` = USA, `EP` = EUR, `JP` = JPN, `HP` = ASIA, `KP` = KOR. Homebrew is marked `HB`. `--add-region` uses it.
+- **Missing games:** an ID with only DLC, or only a folder name, is reported as not in the db and has to be added by hand.
+
+### PKGS section
+
+- **Lines:** one line per PKG file and version.
+  - **ContentID:** the PKG's content ID. A base game and its patches share one, and each DLC has its own.
+  - **Version:** `APP_VER`, or `VERSION` for DLC.
+  - **Type:** `base`, `patch` or `dlc`.
+  - **TitleID:** the game the PKG belongs to.
+  - **DLC title:** the DLC's name. Empty for base games and patches.
+- **What's used for naming:** the DLC title is used in `[dlc]` names, so you can edit it to rename a DLC, e.g. to fix a Japanese-only DLC name. The game title is dropped from its start automatically, as in `Bloodborne_The Old Hunters [dlc].pkg`.
+- **What's only a record:** type and version are always read from the PKG itself. The PKGS section is a record of your collection, and a newer patch simply adds a new line.
+
+### Updating the db
+
+- **Location:** the db is always `ps4_titles.db` next to the script. `--db FILE` overrides this. A `ps4_titles.db` left in `PATH` by older versions is merged into it automatically and then removed.
+- **Your edits are kept:** `--build-db` only adds games and PKGs that aren't in the db yet. Use `--rebuild` to start over.
+- **Automatic updates:** a normal run checks every PKG first. If a game or PKG isn't in the db, or there's no db yet, it runs `--build-db` before renaming, so you never need to run `--build-db` yourself. Use `--no-auto-db` to turn this off.
+- **Older dbs:** a db from an older version, with the games section only, keeps working and gets its PKGS section on the next run.
 
 `ps4_titles.db` isn't part of the repo and is listed in `.gitignore`. It's created on the first run and grows as new games are found. Because git ignores it, it's safe to keep next to the script in a clone, and `git pull` never conflicts with it.
 
@@ -203,8 +239,10 @@ CUSA10207: 배틀 가레가 Rev.2016      ->  Battle Garegga Rev.2016
 CUSA32997: 怒首領蜂大往生 臨廻転生   ->  DoDonPachi DaiOuJou
 ```
 
-- The lookup often returns the original game's name, so an edition suffix may be missing. Edit the db if you want the exact PS4 name.
-- If nothing is found, the original title is kept.
+- **Only game descriptions accepted:** results describing a studio, a person or a series are rejected, and parts of a title shorter than 2 characters aren't searched. A wrong English name is worse than none.
+- **Edition suffixes:** the lookup often returns the original game's name, so an edition suffix may be missing. Edit the db if you want the exact PS4 name.
+- **Nothing found:** the original title is kept.
+- **DLC titles are never looked up:** searches for them return the base game, its studio or its director, not the DLC. A non-English DLC title stays as in the PKG, and you can edit it in the PKGS section.
 - Requests are limited to about one per second to respect Wikimedia's rate limits.
 
 ## Naming scheme
@@ -219,7 +257,7 @@ Every PS4 PKG is named from its own `param.sfo`, whatever it's currently called.
 
 The type tag follows `--sep` and `--no-brackets` like every other tag, and `--no-type` leaves it out.
 
-`<game>` is the game title by default, the title plus its ID with `--keep-id`, or only the ID with `--no-title`. Folders are named `<game>`.
+`<game>` is the game title by default, the title plus its ID with `--keep-id`, or only the ID with `--no-title`. With `--add-region`, the region tag follows it: `Bloodborne [CUSA00900] [USA]`. Folders are named `<game>`.
 
 | `CATEGORY` in param.sfo | Type | Default | `--keep-id` | `--no-title` |
 |---|---|---|---|---|
@@ -246,6 +284,7 @@ These options can be combined freely:
 | `--add-version` | adds a version tag before the type tag | `.pkg` files | `Bloodborne [v1.09] [patch].pkg` |
 | `--add-content-id` | adds a content ID tag before the type tag | `.pkg` files | `Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [patch].pkg` |
 | `--no-type` | leaves out the type tag | `.pkg` files | `Bloodborne [v1.09].pkg` |
+| `--add-region` | adds the region tag (from the db) after the title/ID | folders and files | `Bloodborne [CUSA00900] [USA] [patch].pkg` |
 | `--sep SEP` | uses `SEP` instead of spaces, in titles and between tags | folders and files | `--sep _`: `Grand_Theft_Auto_V_[CUSA00419]_[patch].pkg` |
 | `--no-brackets` | writes tags without `[ ]` | folders and files | `Bloodborne CUSA00900 v1.09 patch.pkg` |
 
