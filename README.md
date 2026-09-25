@@ -99,7 +99,7 @@ games/                  <- games folder (holds the PKG folders)
 
 ```bash
 cd games
-python3 "PS4 Rename/ps4_rename.py" --build-db   # 1. create ps4_titles.db from the .pkg files
+python3 "PS4 Rename/ps4_rename.py" --build-db   # 1. create ps4_titles.db (optional, done automatically)
 python3 "PS4 Rename/ps4_rename.py"              # 2. dry run: shows what would change
 python3 "PS4 Rename/ps4_rename.py" --apply      # 3. rename
 python3 "PS4 Rename/ps4_rename.py" --undo       #    revert, if needed
@@ -135,7 +135,8 @@ Re-run the link command if you move the script.
 | `--keep-id` | Keep the ID after the title: `Bloodborne [CUSA00900]` |
 | `--build-db` | Add games to the db from the `.pkg` files in `PATH` |
 | `--rebuild` | With `--build-db`: start a fresh db, dropping old entries |
-| `--offline` | With `--build-db`: skip the English-name lookup |
+| `--offline` | Skip the English-name lookup when building the db |
+| `--no-auto-db` | Don't build the db automatically when IDs are missing |
 | `--db FILE` | Title db to use (see below) |
 | `--log FILE` | Where to write the results log |
 | `-h`, `--help` | Show help |
@@ -156,6 +157,8 @@ CHTM00777|PS4 Cheats Manager|HB
 - **Region** comes from the content ID prefix: `UP` = USA, `EP` = EUR, `JP` = JPN, `HP` = ASIA, `KP` = KOR. Homebrew is marked `HB`.
 - By default the script uses `PATH/ps4_titles.db`. If that doesn't exist, it falls back to the `ps4_titles.db` next to the script, so one db can serve several folders.
 - `--build-db` only adds games that aren't in the db yet, so your manual edits are kept. Use `--rebuild` to start over.
+- **Automatic updates:** a normal run checks every base and patch PKG first. If an ID isn't in the db, or there's no db yet, it runs `--build-db` before renaming. So new games are picked up without running `--build-db` yourself. Use `--no-auto-db` to turn this off.
+- **Where titles come from:** the title is taken from the base game PKG. If there isn't one, the patch PKG is used, since it holds the game title too. DLC PKGs only hold the DLC's own name. An ID with only DLC, or only a folder name, is reported as not in the db and has to be added by hand.
 
 The `ps4_titles.db` in this repo is an example generated from a real collection.
 

@@ -11,6 +11,8 @@ Usage:
 --build-db looks up an English name online (English Wikipedia, then Wikidata)
 for any title in Japanese/Korean/Chinese and stores it in the db.
 
+IDs missing from the db are added automatically (as --build-db) before renaming.
+
 Every run except --build-db writes rename_results_<action>_<timestamp>.log
 (sections: CHANGED, NOT CHANGED + reason, ERRORS).
 
@@ -192,7 +194,7 @@ def translate_db(db, offline):
 
 def build_db(root, path, rebuild=False, offline=False):
     db = load_db(path) if os.path.exists(path) and not rebuild else {}
-    found = 0
+    found = {}  # gid -> (priority, title, content_id); base game/app beats patch
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if d not in SKIP]
         for fn in fns:
@@ -202,20 +204,37 @@ def build_db(root, path, rebuild=False, offline=False):
                 r = read_sfo(os.path.join(dp, fn))
             except (OSError, ValueError, struct.error):
                 r = None
-            if not r or r[1].get('CATEGORY') not in ('gd', 'gde'):  # base games/apps only
+            # base games/apps; patches carry the game title too, used when no base pkg is present
+            prio = {'gd': 0, 'gde': 0, 'gp': 1}.get(r[1].get('CATEGORY')) if r else None
+            if prio is None:
                 continue
             cid, sfo = r
             gid = sfo.get('TITLE_ID', cid[7:16])
             if gid in db:
                 continue  # keep existing (possibly hand-edited) entries
             title = sfo.get('TITLE_01') or sfo.get('TITLE', gid)  # prefer English title
-            region = REGIONS.get(cid[:2], 'HB' if cid[:1] in 'IE' else '??')
-            db[gid] = (title, region)
-            found += 1
-            print(f'  + {gid}|{title}|{region}')
+            if gid not in found or prio < found[gid][0]:
+                found[gid] = (prio, title, cid)
+    for gid, (_, title, cid) in sorted(found.items()):
+        region = REGIONS.get(cid[:2], 'HB' if cid[:1] in 'IE' else '??')
+        db[gid] = (title, region)
+        print(f'  + {gid}|{title}|{region}')
     translate_db(db, offline)
     write_db(db, path)
-    print(f'{found} new entries, {len(db)} total -> {path}')
+    print(f'{len(found)} new entries, {len(db)} total -> {path}')
+
+
+def missing_ids(root, db):
+    """Title IDs of base/patch pkgs in PATH that aren't in db yet (the ones --build-db can add)."""
+    ids = set()
+    for dp, dns, fns in os.walk(root):
+        dns[:] = [d for d in dns if d not in SKIP]
+        for fn in fns:
+            if fn.lower().endswith('.pkg'):
+                info = pkg_info(os.path.join(dp, fn))
+                if info and info[1] != 'dlc':
+                    ids.add(info[0])
+    return ids - set(db)
 
 
 TAG_RE = re.compile(r'(\s*)\[([A-Z]{4}\d{5})\]')                 # "[CUSA00900]" as added by --keep-id
@@ -394,7 +413,8 @@ def rename_all(root, db, keep_id, apply, undo_log, log):
             for s, d in done:
                 f.write(f'{s}\t{d}\n')
     if unknown:
-        print('IDs not in db (run --build-db or add manually):', ', '.join(sorted(unknown)))
+        print('IDs not in db (no base/patch pkg to read a title from; add them to the db manually):',
+              ', '.join(sorted(unknown)))
     if not apply:
         print('Dry run only. Re-run with --apply to rename.')
 
@@ -439,7 +459,9 @@ def main():
     ap.add_argument('--keep-id', action='store_true', help='keep the ID after the title, e.g. "Bloodborne [CUSA00900]"')
     ap.add_argument('--build-db', action='store_true', help='add games to the db from param.sfo inside *.pkg files')
     ap.add_argument('--rebuild', action='store_true', help='with --build-db: start a fresh db (drops old entries)')
-    ap.add_argument('--offline', action='store_true', help="with --build-db: don't look up English names online")
+    ap.add_argument('--offline', action='store_true', help="don't look up English names online when building the db")
+    ap.add_argument('--no-auto-db', action='store_true',
+                    help="don't run --build-db automatically when IDs are missing from the db")
     ap.add_argument('--db', metavar='FILE', help='db file (default: PATH/ps4_titles.db, '
                     'or ps4_titles.db next to the script if PATH has none)')
     ap.add_argument('--log', metavar='FILE',
@@ -453,8 +475,6 @@ def main():
         shared = os.path.join(HERE, 'ps4_titles.db')
         if not os.path.exists(a.db) and os.path.exists(shared):
             a.db = shared
-    if not a.build_db and not a.undo and not os.path.exists(a.db):
-        sys.exit(f'No db found at {a.db}\nCreate it first: {os.path.basename(sys.argv[0])} "{a.root}" --build-db')
     print(f'Directory: {a.root}\nDB: {a.db}\n')
     undo_log = os.path.join(a.root, 'rename_undo.log')
     if a.build_db:
@@ -467,7 +487,15 @@ def main():
         if a.undo:
             undo(undo_log, log)
         else:
-            rename_all(a.root, load_db(a.db), a.keep_id, a.apply, undo_log, log)
+            db = load_db(a.db) if os.path.exists(a.db) else {}
+            new = missing_ids(a.root, db)
+            if not a.no_auto_db and (new or not db):
+                # new games found: add them to the db first (same as --build-db)
+                print(f'{len(new)} ID(s) not in db: {", ".join(sorted(new))}\nRunning --build-db...')
+                build_db(a.root, a.db, offline=a.offline)
+                db = load_db(a.db)
+                print()
+            rename_all(a.root, db, a.keep_id, a.apply, undo_log, log)
     finally:
         log.write()
 
