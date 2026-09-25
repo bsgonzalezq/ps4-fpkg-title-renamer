@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install / verify prerequisites for ps4-title-renamer: Python 3.8+ and git.
+# Install / verify prerequisites for ps4-pkg-title-renamer: Python 3.8+ and git.
 # Supports apt (Debian/Ubuntu), dnf (Fedora/RHEL), pacman (Arch), zypper (openSUSE) and Homebrew (macOS).
 set -euo pipefail
 

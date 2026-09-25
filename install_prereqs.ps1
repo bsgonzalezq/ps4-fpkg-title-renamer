@@ -1,4 +1,4 @@
-# Install / verify prerequisites for ps4-title-renamer on Windows 10/11: Python 3.8+ and git.
+# Install / verify prerequisites for ps4-pkg-title-renamer on Windows 10/11: Python 3.8+ and git.
 # Run from the repo folder:  powershell -ExecutionPolicy Bypass -File .\install_prereqs.ps1
 $ErrorActionPreference = 'Stop'
 Set-Location -Path $PSScriptRoot

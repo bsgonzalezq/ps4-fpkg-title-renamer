@@ -3,31 +3,37 @@
 move loose pkgs into their game folder, and replace title IDs (CUSA12345, ...) with game titles.
 
 Usage:
-  ps4_rename.py [PATH]              dry run in PATH (default: current directory)
-  ps4_rename.py [PATH] --apply      perform the renames (writes rename_undo.log)
-  ps4_rename.py [PATH] --undo       revert all renames under PATH recorded in rename_undo.log
-  ps4_rename.py [PATH] --undo-last  preview reverting only the last --apply run (+ --apply to do it)
+  ps4_rename.py [PATH]                 dry run in PATH (default: current directory)
+  ps4_rename.py [PATH] --apply         perform the renames (writes rename_undo.log)
+  ps4_rename.py [PATH] --undo          revert all renames under PATH recorded in rename_undo.log
+  ps4_rename.py [PATH] --undo-last     preview reverting only the last --apply run (+ --apply)
   ps4_rename.py [PATH] --undo-match TEXT
-                                    preview reverting only renames whose path contains TEXT
-                                    (+ --apply to do it)
-  ps4_rename.py [PATH] --build-db   create/update the db from *.pkg files
+                                       preview reverting only renames whose path contains TEXT
+                                       (+ --apply)
+  ps4_rename.py [PATH] --build-db      create/update the db from *.pkg files
+  ps4_rename.py [PATH] --clean-logs    delete rename_results_*.log (keeps rename_undo.log)
+
+Name tags (add to a rename run; leave out on a later run to remove them again):
+  --keep-id          Bloodborne [CUSA00900]_patch.pkg          title ID after the title
+  --add-version      Bloodborne_patch [v1.09].pkg              pkg version (APP_VER / VERSION)
+  --add-content-id   Bloodborne_patch [UP9000-CUSA00900_00-BLOODBORNE000000].pkg
+  all three:         Bloodborne [CUSA00900]_patch [v1.09] [UP9000-CUSA00900_00-BLOODBORNE000000].pkg
+  Version and content ID go on .pkg files only (folders hold several pkgs).
 
 --build-db looks up an English name online (English Wikipedia, then Wikidata)
 for any title in Japanese/Korean/Chinese and stores it in the db.
-
 IDs missing from the db are added automatically (as --build-db) before renaming.
 
 Logs are kept in the script's folder: every rename/undo run writes
 rename_results_<action>_<timestamp>.log (CHANGED, NOT CHANGED + reason, ERRORS),
 and --apply records renames in rename_undo.log for --undo. Only the newest results
-logs are kept (5, or --keep-logs N); older ones are deleted automatically
-(rename_undo.log is never deleted).
-
-Works on Linux, macOS and Windows 10/11 (use `python` or `py` instead of `python3`).
-  ps4_rename.py [PATH] --clean-logs delete rename_results_*.log (keeps rename_undo.log)
+logs are kept (5, or --keep-logs N); rename_undo.log is never deleted.
 
 The script keeps itself, its db (ps4_titles.db) and its logs in a folder named
-ps4-title-renamer; run from anywhere else, it creates ./ps4-title-renamer and moves there.
+ps4-pkg-title-renamer (the older name ps4-title-renamer is accepted too); run from
+anywhere else, it creates ./ps4-pkg-title-renamer and moves there.
+
+Works on Linux, macOS and Windows 10/11 (use `py` or `python` instead of `python3`).
 
 DB format (plain text, one per line, '#' comments):  ID|Title|Region
 """
@@ -55,10 +61,11 @@ for _stream in (sys.stdout, sys.stderr):
 HERE = os.path.dirname(os.path.realpath(__file__))   # real script folder, even when run via a symlink
 UNDO_LOG = os.path.join(HERE, 'rename_undo.log')
 DB_FILE = os.path.join(HERE, 'ps4_titles.db')
-TOOL_DIR = 'ps4-title-renamer'   # folder the script (with its db and logs) always lives in
+TOOL_DIR = 'ps4-pkg-title-renamer'   # folder the script (with its db and logs) always lives in
+TOOL_DIRS = (TOOL_DIR, 'ps4-title-renamer')   # names accepted (the second is the repo's old name)
 MAX_LOGS = 5                     # default number of results logs kept (--keep-logs)
 ID_RE = re.compile(r'(?<![A-Z])([A-Z]{4}\d{5})(?!\d)')
-SKIP = {'System Volume Information', '$RECYCLE.BIN', '.Trash-1000', '.git', 'ps4-title-renamer'}
+SKIP = {'System Volume Information', '$RECYCLE.BIN', '.Trash-1000', '.git', 'ps4-pkg-title-renamer', 'ps4-title-renamer'}
 REGIONS = {'UP': 'USA', 'EP': 'EUR', 'JP': 'JPN', 'HP': 'ASIA', 'KP': 'KOR'}
 # chars not allowed on exFAT/NTFS
 BAD = str.maketrans({':': ' - ', '/': '-', '\\': '-', '*': '', '?': '', '"': "'",
@@ -355,7 +362,8 @@ def strip_prefix(text, prefix):
 
 
 def pkg_info(path):
-    """Return (title_id, kind, dlc_title) from a pkg's param.sfo, or None if unreadable/unknown."""
+    """Return (title_id, kind, dlc_title, version, content_id) from a pkg's param.sfo,
+    or None if unreadable/unknown."""
     try:
         r = read_sfo(path)
     except (OSError, ValueError, struct.error):
@@ -368,20 +376,39 @@ def pkg_info(path):
         return None
     gid = sfo.get('TITLE_ID') or cid[7:16]
     dlc = (sfo.get('TITLE_01') or sfo.get('TITLE') or cid[20:]) if kind == 'dlc' else ''
-    return gid, kind, dlc
+    # APP_VER for games/patches; DLC only has VERSION
+    ver = sfo.get('APP_VER') or sfo.get('VERSION') or ''
+    content_id = sfo.get('CONTENT_ID') or cid
+    return gid, kind, dlc, ver, re.sub(r'[^A-Za-z0-9_-]', '', content_id)
 
 
-def pkg_name(info, db, keep_id, unknown):
+def version_tag(ver):
+    """'01.09' -> 'v1.09'."""
+    m = re.fullmatch(r'0*(\d+)\.(\d+)', ver.strip())
+    return f'v{m.group(1)}.{m.group(2)}' if m else (f'v{ver.strip()}' if ver.strip() else '')
+
+
+def pkg_name(info, db, keep_id, unknown, add_version=False, add_cid=False):
     """File name in the <TITLE_ID>_base / _patch / _<DLC title>_dlc .pkg scheme, with the ID
-    then replaced by the game title as for any other name."""
-    gid, kind, dlc = info
+    then replaced by the game title as for any other name, plus optional
+    " [v1.09]" (--add-version) and " [<content ID>]" (--add-content-id) tags."""
+    gid, kind, dlc, ver, cid = info
     if kind != 'dlc':
-        return new_name(f'{gid}_{kind}.pkg', db, keep_id, unknown)
-    dlc = re.sub(r'\s+', ' ', dlc.translate(BAD)).strip()
-    if gid in db:
-        # drop the game title from the DLC title, the name already starts with it
-        dlc = strip_prefix(dlc, safe_title(db, gid)).strip(' -–_.') or dlc
-    return new_name(f'{gid}_{dlc}_dlc.pkg', db, keep_id, unknown)
+        name = new_name(f'{gid}_{kind}.pkg', db, keep_id, unknown)
+    else:
+        dlc = re.sub(r'\s+', ' ', dlc.translate(BAD)).strip()
+        if gid in db:
+            # drop the game title from the DLC title, the name already starts with it
+            dlc = strip_prefix(dlc, safe_title(db, gid)).strip(' -–_.') or dlc
+        name = new_name(f'{gid}_{dlc}_dlc.pkg', db, keep_id, unknown)
+    # tags are added after the title step: the content ID contains the title ID itself
+    tags = ''
+    if add_version and version_tag(ver):
+        tags += f' [{version_tag(ver)}]'
+    if add_cid and cid:
+        tags += f' [{cid}]'
+    stem, ext = os.path.splitext(name)
+    return windows_safe(stem + tags) + ext
 
 
 class ResultLog:
@@ -428,8 +455,9 @@ def game_dir(root, gid, db, keep_id, planned):
     return wanted, True
 
 
-def rename_all(root, db, keep_id, apply, undo_log, log):
+def rename_all(root, db, keep_id, apply, undo_log, log, add_version=False, add_cid=False):
     unknown, done, planned = set(), [], {}
+    claimed = set()   # targets used in this run, so dry runs catch two items getting the same name
     own = {'ps4_titles.db', 'ps4_rename.py', os.path.basename(undo_log)}
     # bottom-up so files are renamed before their parent directories
     for dp, dns, fns in os.walk(root, topdown=False):
@@ -444,7 +472,7 @@ def rename_all(root, db, keep_id, apply, undo_log, log):
             info = pkg_info(os.path.join(dp, name)) if name in fns and name.lower().endswith('.pkg') else None
             if info:
                 # PS4 pkg: name it from its param.sfo, <ID>_base / _patch / _<DLC>_dlc .pkg
-                nn = pkg_name(info, db, keep_id, missing)
+                nn = pkg_name(info, db, keep_id, missing, add_version, add_cid)
                 reason = f'ID {info[0]} (from pkg) not in db' if missing else 'already named'
             elif ID_RE.search(name):
                 nn = new_name(name, db, keep_id, missing)
@@ -459,9 +487,12 @@ def rename_all(root, db, keep_id, apply, undo_log, log):
                 continue
             src, dst = os.path.join(dp, name), os.path.join(dp, subdir, nn)
             target = os.path.join(subdir, nn) if subdir else nn
-            if os.path.exists(lp(dst)) and not same_file(src, dst):  # same file = case-only rename
-                log.error(relpath, f'target already exists: {target}')
+            key = os.path.normcase(os.path.abspath(dst))
+            if key in claimed or (os.path.exists(lp(dst)) and not same_file(src, dst)):  # same file = case-only
+                hint = ' (use --add-version to tell patches/versions apart)' if key in claimed else ''
+                log.error(relpath, f'target already exists: {target}{hint}')
                 continue
+            claimed.add(key)
             print(f'{relpath}  ->  {target}' + (f'   (new folder "{subdir}")' if create else ''))
             if apply:
                 try:
@@ -716,16 +747,19 @@ def merge_db(src, dst):
 
 
 def relocate():
-    """Keep the script in a folder named ps4-title-renamer: if it isn't in one, create
-    ./ps4-title-renamer under the current directory, move the script plus its db and logs
-    there, and re-run from the new location. Returns False if it stayed where it is."""
-    if os.path.normcase(os.path.basename(HERE)) == os.path.normcase(TOOL_DIR):
+    """Keep the script in a folder named ps4-pkg-title-renamer (or the old ps4-title-renamer):
+    if it isn't in one, create ./ps4-pkg-title-renamer under the current directory, move the
+    script plus its db and logs there, and re-run from the new location.
+    Returns False if it stayed where it is."""
+    def is_tool_dir(path):
+        return os.path.normcase(os.path.basename(path)) in {os.path.normcase(d) for d in TOOL_DIRS}
+    if is_tool_dir(HERE):
         return False
     if os.path.isdir(os.path.join(HERE, '.git')):
         print(f'Note: script folder "{HERE}" is a git clone, not moving it into {TOOL_DIR}/\n')
         return False
     cwd = os.getcwd()
-    target = cwd if os.path.normcase(os.path.basename(cwd)) == os.path.normcase(TOOL_DIR) else os.path.join(cwd, TOOL_DIR)
+    target = cwd if is_tool_dir(cwd) else os.path.join(cwd, TOOL_DIR)
     script = os.path.join(target, 'ps4_rename.py')
     if os.path.exists(script):
         print(f'Note: {script} already exists, not replacing it; running from {HERE}\n')
@@ -778,6 +812,10 @@ def main():
                     help='revert only renames whose path contains TEXT, e.g. an ID or a name '
                          '(preview; add --apply to do it)')
     ap.add_argument('--keep-id', action='store_true', help='keep the ID after the title, e.g. "Bloodborne [CUSA00900]"')
+    ap.add_argument('--add-version', action='store_true',
+                    help='add the pkg version to .pkg names, e.g. "Bloodborne_patch [v1.09].pkg"')
+    ap.add_argument('--add-content-id', action='store_true',
+                    help='add the content ID to .pkg names, e.g. "Bloodborne_base [UP9000-CUSA00900_00-BLOODBORNE000000].pkg"')
     ap.add_argument('--build-db', action='store_true', help='add games to the db from param.sfo inside *.pkg files')
     ap.add_argument('--rebuild', action='store_true', help='with --build-db: start a fresh db (drops old entries)')
     ap.add_argument('--offline', action='store_true', help="don't look up English names online when building the db")
@@ -839,7 +877,7 @@ def main():
                 build_db(a.root, a.db, offline=a.offline)
                 db = load_db(a.db)
                 print()
-            rename_all(a.root, db, a.keep_id, a.apply, undo_log, log)
+            rename_all(a.root, db, a.keep_id, a.apply, undo_log, log, a.add_version, a.add_content_id)
     except NothingToDo as e:
         log = None
         sys.exit(str(e))

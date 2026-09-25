@@ -37,7 +37,7 @@ The prerequisites are also listed in [`requirements.txt`](requirements.txt), whi
 # 1. get git if you don't have it (Debian/Ubuntu shown; the script below handles other distros)
 sudo apt-get update && sudo apt-get install -y git
 
-# 2. clone the repo (it's private, so log in first: `gh auth login`, or use an SSH key)
+# 2. clone the repo
 git clone https://github.com/bsgonzalezq/ps4-pkg-title-renamer.git
 cd ps4-pkg-title-renamer
 
@@ -97,6 +97,7 @@ The script always lives in a folder named `ps4-pkg-title-renamer`, together with
 - **Moving itself:** if you run it from a folder with any other name, it creates `ps4-pkg-title-renamer/` in your current directory. It moves itself there along with its db and logs, removes the old folder if that's now empty, and carries on. So you can drop `ps4_rename.py` into your games folder and run it.
 - **Git clones:** the script never moves out of a git clone.
 - **Existing copy:** it won't overwrite a `ps4_rename.py` that's already in `./ps4-pkg-title-renamer/`.
+- **Old folder name:** `ps4-title-renamer`, the repo's previous name, is still accepted, so existing clones keep working.
 
 The examples use relative paths.
 
@@ -156,6 +157,8 @@ Re-run the link command if you move the script.
 | `--undo-last` | Revert only the most recent `--apply` run. Previews unless `--apply` is added |
 | `--undo-match TEXT` | Revert only renames whose path contains `TEXT`. Previews unless `--apply` is added |
 | `--keep-id` | Keep the ID after the title: `Bloodborne [CUSA00900]` |
+| `--add-version` | Add the PKG version to `.pkg` names: `Bloodborne_patch [v1.09].pkg` |
+| `--add-content-id` | Add the content ID to `.pkg` names: `Bloodborne_base [UP9000-CUSA00900_00-BLOODBORNE000000].pkg` |
 | `--build-db` | Add games to the db from the `.pkg` files in `PATH` |
 | `--rebuild` | With `--build-db`: start a fresh db, dropping old entries |
 | `--offline` | Skip the English-name lookup when building the db |
@@ -213,7 +216,31 @@ Every PS4 PKG is named from its own `param.sfo`, whatever it's currently called:
 - **DLC names:** the DLC title comes from the DLC PKG's `param.sfo`. If it starts with the game title, that part is dropped because the name already starts with it: "Bloodborne The Old Hunters" becomes `…_The Old Hunters_dlc.pkg`.
 - **Folders:** folders and other files with an ID in their name get the ID replaced by the title, e.g. `CUSA00900/` becomes `Bloodborne/`.
 - **Other files:** files that aren't PS4 PKGs and have no ID, such as logs, are left alone.
-- **Duplicate names:** two patches for the same game in one folder would both become `_patch.pkg`. The second one is logged as an error and left as it is.
+- **Duplicate names:** two patches for the same game in one folder would both become `_patch.pkg`. The second one is logged as an error and left as it is. Dry runs catch this too. Use `--add-version` to give each patch its own name, e.g. `Bloodborne_patch [v1.04].pkg` and `Bloodborne_patch [v1.09].pkg`.
+
+### Name tags: ID, version, content ID
+
+Three options add information to the names. They can be used together:
+
+| Option | Adds | Applies to | Example |
+|---|---|---|---|
+| `--keep-id` | ` [<title ID>]` after the title | folders and files | `Bloodborne [CUSA00900]_patch.pkg` |
+| `--add-version` | ` [v<version>]` before `.pkg` | `.pkg` files | `Bloodborne_patch [v1.09].pkg` |
+| `--add-content-id` | ` [<content ID>]` before `.pkg` | `.pkg` files | `Bloodborne_patch [UP9000-CUSA00900_00-BLOODBORNE000000].pkg` |
+
+With all three:
+
+```
+Bloodborne [CUSA00900]/
+├── Bloodborne [CUSA00900]_base [v1.00] [UP9000-CUSA00900_00-BLOODBORNE000000].pkg
+├── Bloodborne [CUSA00900]_patch [v1.09] [UP9000-CUSA00900_00-BLOODBORNE000000].pkg
+└── Bloodborne [CUSA00900]_The Old Hunters_dlc [v1.00] [UP9000-CUSA00900_00-SPEXPANSIONDLC03].pkg
+```
+
+- **Version:** read from the PKG's `param.sfo`. Base games and patches use `APP_VER`, the version the game is at after installing, e.g. a patch to 1.09 gives `v1.09`. DLC has no `APP_VER`, so its `VERSION` is used. Leading zeros are dropped, so `01.09` becomes `v1.09`.
+- **Content ID:** the PKG's full content ID, `<region prefix>-<title ID>_00-<label>`. It's unique per PKG: each DLC has its own, and a base game and its patches share one. The prefix also shows the region: `UP` = USA, `EP` = EUR, `JP` = JPN, `HP` = Asia.
+- **Folders:** version and content ID are only added to `.pkg` files, because a folder holds several PKGs with different versions.
+- **Removing tags:** each tag is added only while its option is given. Re-run without the option to remove it again (see [Running again](#running-again)).
 
 ### Loose PKGs in the top folder
 
@@ -229,6 +256,7 @@ Running the script again on renamed items doesn't rename them twice:
 
 - With `--keep-id`, names like `Bloodborne [CUSA00900]` are left as they are.
 - Without `--keep-id`, the ` [CUSA00900]` tag is removed, giving `Bloodborne`. So you can switch between the two styles by re-running with or without the option.
+- `--add-version` and `--add-content-id` work the same way. PKG names are rebuilt from `param.sfo` on every run, so the tags always match the options you give. A second run with the same options changes nothing.
 
 ## Undo
 
