@@ -38,8 +38,8 @@ The prerequisites are also listed in [`requirements.txt`](requirements.txt), whi
 sudo apt-get update && sudo apt-get install -y git
 
 # 2. clone the repo (it's private, so log in first: `gh auth login`, or use an SSH key)
-git clone https://github.com/bsgonzalezq/ps4-title-renamer.git
-cd ps4-title-renamer
+git clone https://github.com/bsgonzalezq/ps4-fpkg-title-renamer.git
+cd ps4-fpkg-title-renamer
 
 # 3. install / verify Python 3.8+ and git (apt, dnf, pacman, zypper or Homebrew)
 ./install_prereqs.sh
@@ -62,8 +62,8 @@ If you'd rather install by hand:
 ```powershell
 winget install -e --id Git.Git          # skip if git is installed
 # reopen the terminal so git is on PATH, then:
-git clone https://github.com/bsgonzalezq/ps4-title-renamer.git
-cd ps4-title-renamer
+git clone https://github.com/bsgonzalezq/ps4-fpkg-title-renamer.git
+cd ps4-fpkg-title-renamer
 powershell -ExecutionPolicy Bypass -File .\install_prereqs.ps1   # installs / checks Python 3.8+ and git
 py ps4_rename.py --help
 ```
@@ -72,7 +72,7 @@ py ps4_rename.py --help
 
 **Using the script on Windows:**
 
-- **Commands:** use `py` or `python` where this README shows `python3`, and `\` in paths, e.g. `py ps4-title-renamer\ps4_rename.py D:\PS4 --apply`.
+- **Commands:** use `py` or `python` where this README shows `python3`, and `\` in paths, e.g. `py ps4-fpkg-title-renamer\ps4_rename.py D:\PS4 --apply`.
 - **Everything else works as on Linux:** a drive root like `D:\` works as `PATH`, and the script checks the OS when it starts. It handles Windows differences automatically:
   - **Long paths:** paths longer than 260 characters work even if Windows' long-path support is off.
   - **Case:** Windows ignores letter case in names and paths (`C:\Games` = `c:\games`), and so does the script, including renames that only change letter case.
@@ -84,7 +84,7 @@ py ps4_rename.py --help
 ### Updating
 
 ```bash
-cd ps4-title-renamer
+cd ps4-fpkg-title-renamer
 git pull
 ```
 
@@ -92,11 +92,11 @@ If you keep a copy of `ps4_rename.py` somewhere else, such as next to your games
 
 ## Quick start
 
-The script always lives in a folder named `ps4-title-renamer`, together with its db (`ps4_titles.db`) and all its logs:
+The script always lives in a folder named `ps4-fpkg-title-renamer`, together with its db (`ps4_titles.db`) and all its logs:
 
-- **Moving itself:** if you run it from a folder with any other name, it creates `ps4-title-renamer/` in your current directory. It moves itself there along with its db and logs, removes the old folder if that's now empty, and carries on. So you can drop `ps4_rename.py` into your games folder and run it.
+- **Moving itself:** if you run it from a folder with any other name, it creates `ps4-fpkg-title-renamer/` in your current directory. It moves itself there along with its db and logs, removes the old folder if that's now empty, and carries on. So you can drop `ps4_rename.py` into your games folder and run it.
 - **Git clones:** the script never moves out of a git clone.
-- **Existing copy:** it won't overwrite a `ps4_rename.py` that's already in `./ps4-title-renamer/`.
+- **Existing copy:** it won't overwrite a `ps4_rename.py` that's already in `./ps4-fpkg-title-renamer/`.
 
 The examples use relative paths.
 
@@ -108,7 +108,7 @@ Both examples use this layout, with the script in a subfolder of the games folde
 games/                  <- games folder (holds the PKG folders)
 ├── CUSA00900/
 ├── CUSA00419/
-└── ps4-title-renamer/  <- script folder (a clone of this repo, or created automatically)
+└── ps4-fpkg-title-renamer/  <- script folder (a clone of this repo, or created automatically)
     ├── ps4_rename.py
     ├── ps4_titles.db
     └── rename_undo.log, rename_results_*.log
@@ -118,17 +118,17 @@ games/                  <- games folder (holds the PKG folders)
 
 ```bash
 cd games
-python3 ps4-title-renamer/ps4_rename.py --build-db   # 1. create ps4_titles.db (optional, done automatically)
-python3 ps4-title-renamer/ps4_rename.py              # 2. dry run: shows what would change
-python3 ps4-title-renamer/ps4_rename.py --apply      # 3. rename
-python3 ps4-title-renamer/ps4_rename.py --undo       #    revert everything, if needed
-python3 ps4-title-renamer/ps4_rename.py --undo-last  #    or preview reverting just the last run (see Undo)
+python3 ps4-fpkg-title-renamer/ps4_rename.py --build-db   # 1. create ps4_titles.db (optional, done automatically)
+python3 ps4-fpkg-title-renamer/ps4_rename.py              # 2. dry run: shows what would change
+python3 ps4-fpkg-title-renamer/ps4_rename.py --apply      # 3. rename
+python3 ps4-fpkg-title-renamer/ps4_rename.py --undo       #    revert everything, if needed
+python3 ps4-fpkg-title-renamer/ps4_rename.py --undo-last  #    or preview reverting just the last run (see Undo)
 ```
 
-**Option 2: your terminal is in the script folder** (`games/ps4-title-renamer/`). Pass `..`, the parent folder, as `PATH`:
+**Option 2: your terminal is in the script folder** (`games/ps4-fpkg-title-renamer/`). Pass `..`, the parent folder, as `PATH`:
 
 ```bash
-cd games/ps4-title-renamer
+cd games/ps4-fpkg-title-renamer
 python3 ps4_rename.py .. --build-db
 python3 ps4_rename.py ..
 python3 ps4_rename.py .. --apply
@@ -248,20 +248,20 @@ Run these from the games folder:
 
 ```bash
 # revert everything
-python3 ps4-title-renamer/ps4_rename.py --undo
+python3 ps4-fpkg-title-renamer/ps4_rename.py --undo
 
 # step back one --apply run at a time: preview, then do it
-python3 ps4-title-renamer/ps4_rename.py --undo-last
-python3 ps4-title-renamer/ps4_rename.py --undo-last --apply
+python3 ps4-fpkg-title-renamer/ps4_rename.py --undo-last
+python3 ps4-fpkg-title-renamer/ps4_rename.py --undo-last --apply
 
 # a single file
-python3 ps4-title-renamer/ps4_rename.py --undo-match "Old Hunters" --apply
+python3 ps4-fpkg-title-renamer/ps4_rename.py --undo-match "Old Hunters" --apply
 
 # one game: its folder and every file in it
-python3 ps4-title-renamer/ps4_rename.py --undo-match Bloodborne --apply
+python3 ps4-fpkg-title-renamer/ps4_rename.py --undo-match Bloodborne --apply
 
 # games in another folder: pass it as PATH
-python3 ps4-title-renamer/ps4_rename.py ../other-games --undo-last --apply
+python3 ps4-fpkg-title-renamer/ps4_rename.py ../other-games --undo-last --apply
 ```
 
 A preview lists every rename it would revert as `current name -> original name` and changes nothing:
