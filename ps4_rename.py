@@ -22,7 +22,8 @@ The game title is always used, other parts are added as tags; the type tag is la
   --add-version      version tag              Bloodborne [v1.09] [patch].pkg   (patch: APP_VER, base/DLC: VERSION)
   --add-content-id   content ID tag           Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [patch].pkg
   --no-type          no type tag              Bloodborne [v1.09].pkg
-  --no-title         no game title in .pkg    [CUSA00900] [v1.09] [patch].pkg   (needs --add-id or --add-content-id)
+  --no-title         no game title in .pkg    CUSA00900 [v1.09] [patch].pkg     (needs --add-id or --add-content-id;
+                                              the first part is written without brackets)
   --sep SEP          SEP instead of spaces    --sep _ : Bloodborne_[CUSA00900]_[v1.09]_[patch].pkg
   --no-brackets      tags without [ ]         Bloodborne CUSA00900 v1.09 patch.pkg
   --order PARTS      order in .pkg names      --order id,title : [CUSA00900] Bloodborne [v1.09] [patch].pkg
@@ -507,19 +508,30 @@ class Style:
     def file_name(self, db, gid, kind, label='', ver='', cid=''):
         """A .pkg name (without extension) from its parts, in self.order (--order). Default:
         <title> <label> [ID] [region] [version] [content ID] [type], e.g.
-        "Bloodborne The Old Hunters [CUSA00900] [USA] [v1.00] [dlc]"."""
+        "Bloodborne The Old Hunters [CUSA00900] [USA] [v1.00] [dlc]". With --no-title the name
+        starts with its first part unbracketed: "CUSA00900 [v1.09] [patch]"."""
         known = gid in db
+        region = db[gid][1] if known and self.add_region and db[gid][1] in REGION_TAGS else ''
+        # (text, is_tag): tags are bracketed unless --no-brackets
         parts = {
-            'title': '' if self.no_title else (self.spaced(safe_title(db, gid)) if known else gid),
-            'label': self.spaced(label) if label else '',
+            'title': ('' if self.no_title else (self.spaced(safe_title(db, gid)) if known else gid), False),
+            'label': (self.spaced(label) if label else '', False),
             # an unknown game already shows its ID as the title
-            'id': self.tag(gid) if self.add_id and (known or self.no_title) else '',
-            'region': self.region(db, gid),
-            'version': self.tag(version_tag(ver)) if self.add_version and version_tag(ver) else '',
-            'cid': self.tag(cid) if self.add_cid and cid else '',
-            'type': '' if self.no_type else self.tag(kind),
+            'id': (gid if self.add_id and (known or self.no_title) else '', True),
+            'region': (region, True),
+            'version': (version_tag(ver) if self.add_version else '', True),
+            'cid': (cid if self.add_cid else '', True),
+            'type': ('' if self.no_type else kind, True),
         }
-        return self.join(*(parts[p] for p in self.order))
+        out = []
+        for name in self.order:
+            text, is_tag = parts[name]
+            if not text:
+                continue
+            # with --no-title the first part is written plain, so the name doesn't start with "["
+            plain = self.no_title and not out
+            out.append(self.tag(text) if is_tag and not plain else text)
+        return self.join(*out)
 
     def game(self, db, gid, extra=''):
         """The game part of a folder name: "Bloodborne", "Bloodborne [CUSA00900]", optionally
@@ -1127,7 +1139,7 @@ def main():
     ap.add_argument('--keep-id', dest='add_id', action='store_true', help=argparse.SUPPRESS)  # old name
     ap.add_argument('--no-title', action='store_true',
                     help='leave the game title out of .pkg file names (folders keep it); needs --add-id '
-                         'or --add-content-id, e.g. "[CUSA00900] [v1.09] [patch].pkg"')
+                         'or --add-content-id; the first part loses its brackets, e.g. "CUSA00900 [v1.09] [patch].pkg"')
     ap.add_argument('--add-version', action='store_true',
                     help='add the pkg version to .pkg names, e.g. "Bloodborne [v1.09] [patch].pkg" '
                          '(patches: APP_VER; base games and DLC: VERSION)')
