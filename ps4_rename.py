@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""Replace PS4 title IDs (CUSA12345, CHTM00777, ...) in file/dir names with game titles.
+
+Usage:
+  ps4_rename.py [PATH]              dry run in PATH (default: current directory)
+  ps4_rename.py [PATH] --apply      perform the renames (writes rename_undo.log)
+  ps4_rename.py [PATH] --undo       revert renames recorded in rename_undo.log
+  ps4_rename.py [PATH] --build-db   create/update the db from *.pkg files
+
+--build-db looks up an English name online (English Wikipedia, then Wikidata)
+for any title in Japanese/Korean/Chinese and stores it in the db.
+
+Every run except --build-db writes rename_results_<action>_<timestamp>.log
+(sections: CHANGED, NOT CHANGED + reason, ERRORS).
+
+DB format (plain text, one per line, '#' comments):  ID|Title|Region
+"""
+import argparse, json, os, re, struct, sys, time, unicodedata
+import urllib.error, urllib.parse, urllib.request
+from datetime import datetime
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ID_RE = re.compile(r'(?<![A-Z])([A-Z]{4}\d{5})(?!\d)')
+SKIP = {'System Volume Information', '$RECYCLE.BIN', '.Trash-1000'}
+REGIONS = {'UP': 'USA', 'EP': 'EUR', 'JP': 'JPN', 'HP': 'ASIA', 'KP': 'KOR'}
+# chars not allowed on exFAT/NTFS
+BAD = str.maketrans({':': ' - ', '/': '-', '\\': '-', '*': '', '?': '', '"': "'",
+                     '<': '', '>': '', '|': '-', '・': '-', '™': '', '®': '', '©': ''})
+
+
+def load_db(path):
+    db = {}
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            gid, title, region = (p.strip() for p in line.split('|', 2))
+            db[gid.upper()] = (title, region)
+    return db
+
+
+def read_sfo(pkg):
+    """Return (content_id, {key: value}) from a PS4 PKG's param.sfo, or None."""
+    with open(pkg, 'rb') as f:
+        h = f.read(0x100)
+        if h[:4] != b'\x7fCNT':
+            return None
+        count, = struct.unpack('>I', h[0x10:0x14])
+        table, = struct.unpack('>I', h[0x18:0x1C])
+        cid = h[0x40:0x64].decode('ascii', 'replace')
+        f.seek(table)
+        entries = f.read(count * 32)
+        for i in range(count):
+            eid, _, _, _, off, size = struct.unpack('>6I', entries[i * 32:i * 32 + 24])
+            if eid != 0x1000:  # param.sfo
+                continue
+            f.seek(off)
+            d = f.read(size)
+            keys, data, n = struct.unpack('<III', d[8:20])
+            out = {}
+            for j in range(n):
+                ko, fmt, ln, _, do = struct.unpack('<HHIII', d[20 + j * 16:36 + j * 16])
+                k = d[keys + ko:d.index(b'\0', keys + ko)].decode()
+                v = d[data + do:data + do + ln]
+                out[k] = struct.unpack('<I', v[:4])[0] if fmt == 0x0404 else v.rstrip(b'\0').decode('utf-8', 'replace')
+            return cid, out
+    return None
+
+
+FOREIGN = re.compile(r'[぀-ヺー-ヿ㐀-䶿一-鿿가-힯ᄀ-ᇿ㄰-㆏]')
+SEGMENT = re.compile(r'[぀-ヺー-ヿ㐀-䶿一-鿿가-힯ᄀ-ᇿ㄰-㆏]'
+                     r'[぀-ヺー-ヿ㐀-䶿一-鿿가-힯ᄀ-ᇿ㄰-㆏\s]*')
+USER_AGENT = 'ps4_rename/1.0 (PS4 PKG title lookup; python-urllib)'
+_last_request = [0.0]
+
+
+def is_foreign(title):
+    return bool(FOREIGN.search(title))
+
+
+def http_json(url, params):
+    """GET a Wikimedia API as JSON, max 1 request/sec, retrying on rate limits."""
+    for attempt in range(4):
+        wait = 1.5 - (time.monotonic() - _last_request[0])
+        if wait > 0:
+            time.sleep(wait)
+        _last_request[0] = time.monotonic()
+        req = urllib.request.Request(url + '?' + urllib.parse.urlencode(params),
+                                     headers={'User-Agent': USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == 3:
+                raise
+            time.sleep(int(e.headers.get('Retry-After') or 0) or 5 * (attempt + 1))
+        except (urllib.error.URLError, OSError):
+            if attempt == 3:
+                raise
+            time.sleep(3 * (attempt + 1))  # transient network error
+    return {}
+
+
+def search_english(query):
+    """Find the English name of a game from its Japanese/Korean/Chinese name, or None."""
+    lang = 'ko' if re.search(r'[가-힯]', query) else 'ja'
+    try:
+        # English Wikipedia articles usually quote the original-language title
+        r = http_json('https://en.wikipedia.org/w/api.php', {
+            'action': 'query', 'generator': 'search', 'gsrsearch': query, 'gsrlimit': 5,
+            'prop': 'description', 'format': 'json', 'formatversion': 2})
+        pages = sorted(r.get('query', {}).get('pages', []), key=lambda p: p.get('index', 99))
+        for p in pages:
+            if 'game' in p.get('description', '').lower():
+                return p['title']
+        # Wikidata: search the native-language label, return the English label
+        r = http_json('https://www.wikidata.org/w/api.php', {
+            'action': 'wbsearchentities', 'search': query, 'language': lang,
+            'uselang': 'en', 'type': 'item', 'limit': 5, 'format': 'json'})
+        for item in r.get('search', []):
+            label = item.get('label', '')
+            if 'game' in item.get('description', '').lower() and label and not is_foreign(label):
+                return label
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f'    lookup failed for "{query}": {e}', file=sys.stderr)
+    return None
+
+
+def translate_title(title):
+    """Return an English version of a non-English title (looked up online), or None."""
+    t = unicodedata.normalize('NFKC', title).replace('・', ' ').replace('~', ' ')
+    t = re.sub(r'\s+', ' ', t).strip()
+    segments = [s.strip() for s in SEGMENT.findall(t)]
+    latin = [s.strip() for s in SEGMENT.split(t) if s.strip()]
+
+    def with_extras(name):
+        # keep parts of the original that were already English (e.g. "Rev.2016", "Ψ")
+        key = re.sub(r'\W', '', name).lower()
+        extra = [s for s in latin if re.sub(r'\W', '', s).lower() not in key]
+        return ' '.join([name] + extra)
+
+    name = search_english(t)
+    if name:
+        return with_extras(name)
+    # whole title not found: translate each non-English part on its own,
+    # falling back to single words when a multi-word part isn't found
+    parts = []
+    for seg in sorted(segments, key=len, reverse=True):
+        hit = search_english(seg) if seg != t else None
+        if not hit and ' ' in seg:
+            hits = [search_english(w) for w in sorted(seg.split(), key=len, reverse=True)]
+            hit = next((h for h in hits if h), None)
+        if hit:
+            parts.append(hit)
+    if not parts:
+        return None
+    # the longest segment is usually the game name; other hits add to it if new
+    name = parts[0]
+    for p in parts[1:]:
+        if p.lower() not in name.lower():
+            name += ' ' + p
+    return with_extras(name)
+
+
+def write_db(db, path):
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('# PS4 title DB: ID|Title|Region  (USA/EUR/JPN/ASIA, HB = homebrew)\n')
+        for gid in sorted(db):
+            f.write(f'{gid}|{db[gid][0]}|{db[gid][1]}\n')
+
+
+def translate_db(db, offline):
+    """Replace non-English titles in db with English names found online."""
+    foreign = [g for g in sorted(db) if is_foreign(db[g][0])]
+    if not foreign:
+        return
+    if offline:
+        print(f'{len(foreign)} non-English title(s) left as-is (--offline)')
+        return
+    print(f'Looking up English names for {len(foreign)} title(s)...')
+    for gid in foreign:
+        title, region = db[gid]
+        en = translate_title(title)
+        if en:
+            db[gid] = (en, region)
+            print(f'  ~ {gid}: {title}  ->  {en}')
+        else:
+            print(f'  ! {gid}: no English name found, keeping "{title}"')
+
+
+def build_db(root, path, rebuild=False, offline=False):
+    db = load_db(path) if os.path.exists(path) and not rebuild else {}
+    found = 0
+    for dp, dns, fns in os.walk(root):
+        dns[:] = [d for d in dns if d not in SKIP]
+        for fn in fns:
+            if not fn.lower().endswith('.pkg'):
+                continue
+            try:
+                r = read_sfo(os.path.join(dp, fn))
+            except (OSError, ValueError, struct.error):
+                r = None
+            if not r or r[1].get('CATEGORY') not in ('gd', 'gde'):  # base games/apps only
+                continue
+            cid, sfo = r
+            gid = sfo.get('TITLE_ID', cid[7:16])
+            if gid in db:
+                continue  # keep existing (possibly hand-edited) entries
+            title = sfo.get('TITLE_01') or sfo.get('TITLE', gid)  # prefer English title
+            region = REGIONS.get(cid[:2], 'HB' if cid[:1] in 'IE' else '??')
+            db[gid] = (title, region)
+            found += 1
+            print(f'  + {gid}|{title}|{region}')
+    translate_db(db, offline)
+    write_db(db, path)
+    print(f'{found} new entries, {len(db)} total -> {path}')
+
+
+def new_name(name, db, keep_id, unknown):
+    def sub(m):
+        gid = m.group(1)
+        if gid not in db:
+            unknown.add(gid)
+            return gid
+        t = re.sub(r'\s+', ' ', db[gid][0].translate(BAD)).strip()
+        return f'{t} [{gid}]' if keep_id else t
+    return ID_RE.sub(sub, name).rstrip(' .')
+
+
+class ResultLog:
+    """Collects changed / not changed / error entries and writes them to a log file."""
+
+    def __init__(self, path, action):
+        self.path, self.action = path, action
+        self.changed, self.unchanged, self.errors = [], [], []
+
+    def change(self, src, dst):
+        self.changed.append(f'{src}  ->  {dst}')
+
+    def keep(self, path, reason):
+        self.unchanged.append(f'{path}  ({reason})')
+
+    def error(self, path, reason):
+        self.errors.append(f'{path}  ({reason})')
+        print(f'ERROR: {path} ({reason})', file=sys.stderr)
+
+    def write(self):
+        sections = [('CHANGED', self.changed), ('NOT CHANGED', self.unchanged), ('ERRORS', self.errors)]
+        with open(self.path, 'w', encoding='utf-8') as f:
+            f.write(f'# ps4_rename.py {self.action}  {datetime.now():%Y-%m-%d %H:%M:%S}\n')
+            f.write('# ' + ', '.join(f'{t.lower()}: {len(l)}' for t, l in sections) + '\n')
+            for title, lines in sections:
+                f.write(f'\n=== {title} ({len(lines)}) ===\n')
+                f.writelines(l + '\n' for l in lines)
+        print(f'\nChanged: {len(self.changed)}, not changed: {len(self.unchanged)}, '
+              f'errors: {len(self.errors)}\nLog: {self.path}')
+
+
+def rename_all(root, db, keep_id, apply, undo_log, log):
+    unknown, done = set(), []
+    own = {'ps4_titles.db', 'ps4_rename.py', os.path.basename(undo_log)}
+    # bottom-up so files are renamed before their parent directories
+    for dp, dns, fns in os.walk(root, topdown=False):
+        rel = os.path.relpath(dp, root)
+        if any(part in SKIP for part in rel.split(os.sep)):
+            continue
+        for name in fns + dns:
+            if name in SKIP or name in own or name.startswith('rename_results_'):
+                continue
+            relpath = os.path.normpath(os.path.join(rel, name))
+            missing = set()
+            nn = new_name(name, db, keep_id, missing)
+            unknown |= missing
+            if nn == name:
+                if missing:
+                    log.keep(relpath, 'ID not in db: ' + ', '.join(sorted(missing)))
+                elif ID_RE.search(name):
+                    log.keep(relpath, 'title same as current name')
+                else:
+                    log.keep(relpath, 'no game ID in name')
+                continue
+            src, dst = os.path.join(dp, name), os.path.join(dp, nn)
+            if os.path.exists(dst):
+                log.error(relpath, f'target already exists: {nn}')
+                continue
+            print(f'{relpath}  ->  {nn}')
+            if apply:
+                try:
+                    os.rename(src, dst)
+                except OSError as e:
+                    log.error(relpath, f'rename to "{nn}" failed: {e.strerror}')
+                    continue
+                done.append((src, dst))
+            log.change(relpath, nn)
+    if apply and done:
+        with open(undo_log, 'a', encoding='utf-8') as f:
+            f.write(f'# {datetime.now().isoformat()}\n')
+            for s, d in done:
+                f.write(f'{s}\t{d}\n')
+    if unknown:
+        print('IDs not in db (run --build-db or add manually):', ', '.join(sorted(unknown)))
+    if not apply:
+        print('Dry run only. Re-run with --apply to rename.')
+
+
+def undo(undo_log, log):
+    if not os.path.exists(undo_log):
+        sys.exit(f'No undo log: {undo_log}')
+    with open(undo_log, encoding='utf-8') as f:
+        pairs = [l.rstrip('\n').split('\t') for l in f if l.strip() and not l.startswith('#')]
+    # reverse order: parents renamed last are restored first
+    for src, dst in reversed(pairs):
+        if not os.path.exists(dst):
+            log.error(dst, 'renamed item no longer exists')
+        elif os.path.exists(src):
+            log.keep(dst, f'original name already in use: {src}')
+        else:
+            try:
+                os.rename(dst, src)
+            except OSError as e:
+                log.error(dst, f'restore failed: {e.strerror}')
+                continue
+            print(f'{dst} -> {src}')
+            log.change(dst, src)
+    if not log.errors:
+        os.rename(undo_log, undo_log + '.done')
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('root', nargs='?', default='.', metavar='PATH',
+                    help='directory to process (default: current directory)')
+    ap.add_argument('--apply', action='store_true', help='perform the renames (default is a dry run)')
+    ap.add_argument('--undo', action='store_true', help='revert renames recorded in PATH/rename_undo.log')
+    ap.add_argument('--keep-id', action='store_true', help='keep the ID after the title, e.g. "Bloodborne [CUSA00900]"')
+    ap.add_argument('--build-db', action='store_true', help='add games to the db from param.sfo inside *.pkg files')
+    ap.add_argument('--rebuild', action='store_true', help='with --build-db: start a fresh db (drops old entries)')
+    ap.add_argument('--offline', action='store_true', help="with --build-db: don't look up English names online")
+    ap.add_argument('--db', metavar='FILE', help='db file (default: PATH/ps4_titles.db, '
+                    'or ps4_titles.db next to the script if PATH has none)')
+    ap.add_argument('--log', metavar='FILE',
+                    help='results log path (default: PATH/rename_results_<action>_<timestamp>.log)')
+    a = ap.parse_args()
+    a.root = os.path.abspath(a.root)
+    if not os.path.isdir(a.root):
+        ap.error(f'not a directory: {a.root}')
+    if not a.db:
+        a.db = os.path.join(a.root, 'ps4_titles.db')
+        shared = os.path.join(HERE, 'ps4_titles.db')
+        if not os.path.exists(a.db) and os.path.exists(shared):
+            a.db = shared
+    if not a.build_db and not a.undo and not os.path.exists(a.db):
+        sys.exit(f'No db found at {a.db}\nCreate it first: {os.path.basename(sys.argv[0])} "{a.root}" --build-db')
+    print(f'Directory: {a.root}\nDB: {a.db}\n')
+    undo_log = os.path.join(a.root, 'rename_undo.log')
+    if a.build_db:
+        build_db(a.root, a.db, a.rebuild, a.offline)
+        return
+    action = 'undo' if a.undo else 'apply' if a.apply else 'dryrun'
+    log = ResultLog(a.log or os.path.join(a.root, f'rename_results_{action}_{datetime.now():%Y%m%d_%H%M%S}.log'),
+                    action)
+    try:
+        if a.undo:
+            undo(undo_log, log)
+        else:
+            rename_all(a.root, load_db(a.db), a.keep_id, a.apply, undo_log, log)
+    finally:
+        log.write()
+
+
+if __name__ == '__main__':
+    main()

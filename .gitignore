@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+rename_results_*.log
+rename_undo.log*
+*.pkg
