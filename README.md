@@ -404,5 +404,17 @@ This deletes every `rename_results_*.log` in the script's folder, plus any left 
 
 - Characters that exFAT/NTFS don't allow are replaced: `:` becomes ` - `; `? * " < > |`, `™` and `®` are removed or replaced.
 - Existing files are never overwritten. A name collision is logged as an error and skipped.
+- **Broken or unreadable PKGs:** every `.pkg` is checked before its `param.sfo` is used. A PS4 PKG whose `param.sfo` can't be used is logged under ERRORS with the reason and left as it is. It's usually a bad or incomplete download. The possible reasons are:
+
+  | Reason in the log | Meaning |
+  |---|---|
+  | `param.sfo not found in pkg` | the PKG has no `param.sfo` entry |
+  | `param.sfo corrupt or encrypted: bad signature` | the data isn't a valid, unencrypted `param.sfo` |
+  | `param.sfo corrupt: ...` / `pkg corrupt: ...` | offsets, sizes or tables point outside the file |
+  | `pkg unreadable: ...` | the file couldn't be read, e.g. permissions or a disk error |
+
+  - **Summary:** both a rename run and `--build-db` end with a count of the PKGs that couldn't be read. `--build-db` also lists each one.
+  - **Size limit:** a `param.sfo` is never read past 1 MB, even if a corrupt header claims more.
+  - **Other `.pkg` files:** a file with a `.pkg` extension that isn't a PS4 PKG at all, i.e. has no PKG header, is treated like any other file. It's renamed only if its name contains a title ID, and otherwise logged as `not a PS4 pkg`.
 - `System Volume Information`, `$RECYCLE.BIN` and the script's own files are skipped.
 - Check that your install tools don't rely on ID-named folders. If they do, use `--keep-id`.

@@ -122,32 +122,63 @@ def load_db(path):
     return db
 
 
+MAX_SFO = 1 << 20   # a real param.sfo is a few KB; never read more than 1 MB
+
+
+class NotPkg(Exception):
+    """The file isn't a PS4 pkg at all (no pkg header)."""
+
+
+class SfoError(Exception):
+    """A PS4 pkg whose param.sfo is missing, corrupt or unreadable; the message says which."""
+
+
 def read_sfo(pkg):
-    """Return (content_id, {key: value}) from a PS4 PKG's param.sfo, or None."""
-    with open(lp(pkg), 'rb') as f:
-        h = f.read(0x100)
-        if h[:4] != b'\x7fCNT':
-            return None
-        count, = struct.unpack('>I', h[0x10:0x14])
-        table, = struct.unpack('>I', h[0x18:0x1C])
-        cid = h[0x40:0x64].decode('ascii', 'replace')
-        f.seek(table)
-        entries = f.read(count * 32)
-        for i in range(count):
-            eid, _, _, _, off, size = struct.unpack('>6I', entries[i * 32:i * 32 + 24])
-            if eid != 0x1000:  # param.sfo
-                continue
-            f.seek(off)
-            d = f.read(size)
-            keys, data, n = struct.unpack('<III', d[8:20])
-            out = {}
-            for j in range(n):
-                ko, fmt, ln, _, do = struct.unpack('<HHIII', d[20 + j * 16:36 + j * 16])
-                k = d[keys + ko:d.index(b'\0', keys + ko)].decode()
-                v = d[data + do:data + do + ln]
-                out[k] = struct.unpack('<I', v[:4])[0] if fmt == 0x0404 else v.rstrip(b'\0').decode('utf-8', 'replace')
-            return cid, out
-    return None
+    """Return (content_id, {key: value}) from a PS4 PKG's param.sfo.
+    Raises NotPkg for files that aren't PS4 pkgs, SfoError when the param.sfo can't be used."""
+    try:
+        with open(lp(pkg), 'rb') as f:
+            fsize = os.fstat(f.fileno()).st_size
+            h = f.read(0x100)
+            if len(h) < 0x100 or h[:4] != b'\x7fCNT':
+                raise NotPkg('not a PS4 pkg')
+            count, = struct.unpack('>I', h[0x10:0x14])
+            table, = struct.unpack('>I', h[0x18:0x1C])
+            if count == 0 or count > 100000 or table + count * 32 > fsize:
+                raise SfoError('pkg corrupt: entry table out of range')
+            cid = h[0x40:0x64].decode('ascii', 'replace')
+            f.seek(table)
+            entries = f.read(count * 32)
+            for i in range(count):
+                eid, _, _, _, off, size = struct.unpack('>6I', entries[i * 32:i * 32 + 24])
+                if eid != 0x1000:  # param.sfo
+                    continue
+                if size < 20 or size > MAX_SFO or off + size > fsize:
+                    raise SfoError(f'param.sfo corrupt: size {size} / offset {off} out of range')
+                f.seek(off)
+                d = f.read(size)
+                if d[:4] != b'\0PSF':
+                    raise SfoError('param.sfo corrupt or encrypted: bad signature')
+                keys, data, n = struct.unpack('<III', d[8:20])
+                if not (20 + n * 16 <= keys <= len(d) and keys <= data <= len(d)):
+                    raise SfoError('param.sfo corrupt: bad key/data tables')
+                out = {}
+                for j in range(n):
+                    ko, fmt, ln, _, do = struct.unpack('<HHIII', d[20 + j * 16:36 + j * 16])
+                    if data + do + ln > len(d):
+                        raise SfoError('param.sfo corrupt: value out of range')
+                    k = d[keys + ko:d.index(b'\0', keys + ko)].decode()
+                    v = d[data + do:data + do + ln]
+                    out[k] = (struct.unpack('<I', v[:4])[0] if fmt == 0x0404
+                              else v.rstrip(b'\0').decode('utf-8', 'replace'))
+                return cid, out
+            raise SfoError('param.sfo not found in pkg')
+    except (NotPkg, SfoError):
+        raise
+    except OSError as e:
+        raise SfoError(f'pkg unreadable: {e.strerror or e}')
+    except (ValueError, struct.error) as e:  # includes UnicodeDecodeError
+        raise SfoError(f'param.sfo corrupt: {e}')
 
 
 FOREIGN = re.compile(r'[぀-ヺー-ヿ㐀-䶿一-鿿가-힯ᄀ-ᇿ㄰-㆏]')
@@ -274,6 +305,7 @@ def translate_db(db, offline):
 def build_db(root, path, rebuild=False, offline=False):
     db = load_db(path) if os.path.exists(path) and not rebuild else {}
     found = {}  # gid -> (priority, title, content_id); base game/app beats patch
+    bad = 0
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if d not in SKIP]
         for fn in fns:
@@ -281,7 +313,11 @@ def build_db(root, path, rebuild=False, offline=False):
                 continue
             try:
                 r = read_sfo(os.path.join(dp, fn))
-            except (OSError, ValueError, struct.error):
+            except NotPkg:
+                r = None
+            except SfoError as e:
+                bad += 1
+                print(f'  ! {os.path.relpath(os.path.join(dp, fn), root)}: {e}', file=sys.stderr)
                 r = None
             # base games/apps; patches carry the game title too, used when no base pkg is present
             prio = {'gd': 0, 'gde': 0, 'gp': 1}.get(r[1].get('CATEGORY')) if r else None
@@ -301,6 +337,8 @@ def build_db(root, path, rebuild=False, offline=False):
     translate_db(db, offline)
     write_db(db, path)
     print(f'{len(found)} new entries, {len(db)} total -> {path}')
+    if bad:
+        print(f'{bad} pkg(s) could not be read (see "!" lines above)')
 
 
 def missing_ids(root, db):
@@ -411,19 +449,27 @@ def strip_prefix(text, prefix):
     return text[i:]
 
 
-def pkg_info(path):
-    """Return (title_id, kind, dlc_title, version, content_id) from a pkg's param.sfo,
-    or None if unreadable/unknown."""
+def pkg_read(path):
+    """(info, problem) for a .pkg: info = (title_id, kind, dlc_title, version, content_id) or None.
+    problem is None when info is set; otherwise ('notpkg' | 'type' | 'error', reason)."""
     try:
-        r = read_sfo(path)
-    except (OSError, ValueError, struct.error):
-        return None
-    if not r:
-        return None
-    cid, sfo = r
+        cid, sfo = read_sfo(path)
+    except NotPkg as e:
+        return None, ('notpkg', str(e))
+    except SfoError as e:
+        return None, ('error', str(e))
     kind = PKG_KINDS.get(sfo.get('CATEGORY'))
     if not kind:
-        return None
+        return None, ('type', f"pkg type not renamed (CATEGORY {sfo.get('CATEGORY') or 'missing'})")
+    return _pkg_tuple(cid, sfo, kind), None
+
+
+def pkg_info(path):
+    """(title_id, kind, dlc_title, version, content_id) from a pkg's param.sfo, or None."""
+    return pkg_read(path)[0]
+
+
+def _pkg_tuple(cid, sfo, kind):
     gid = sfo.get('TITLE_ID') or cid[7:16]
     dlc = (sfo.get('TITLE_01') or sfo.get('TITLE') or cid[20:]) if kind == 'dlc' else ''
     # APP_VER for games/patches; DLC only has VERSION
@@ -542,6 +588,7 @@ def game_dir(root, gid, db, style, planned):
 
 def rename_all(root, db, style, apply, undo_log, log):
     unknown, done, planned = set(), [], {}
+    bad_pkgs = 0      # PS4 pkgs whose param.sfo couldn't be used
     claimed = set()   # targets used in this run, so dry runs catch two items getting the same name
     own = {'ps4_titles.db', 'ps4_rename.py', os.path.basename(undo_log)}
     # bottom-up so files are renamed before their parent directories
@@ -554,7 +601,13 @@ def rename_all(root, db, style, apply, undo_log, log):
                 continue
             relpath = os.path.normpath(os.path.join(rel, name))
             missing = set()
-            info = pkg_info(os.path.join(dp, name)) if name in fns and name.lower().endswith('.pkg') else None
+            info, problem = (pkg_read(os.path.join(dp, name)) if name in fns and name.lower().endswith('.pkg')
+                             else (None, None))
+            if problem and problem[0] == 'error':
+                # a PS4 pkg whose param.sfo is missing/corrupt/unreadable: flag it, don't rename
+                bad_pkgs += 1
+                log.error(relpath, problem[1])
+                continue
             if info:
                 # PS4 pkg: name it from its param.sfo, <ID>_base / _patch / _<DLC>_dlc .pkg
                 nn = pkg_name(info, db, style, missing)
@@ -565,7 +618,7 @@ def rename_all(root, db, style, apply, undo_log, log):
                 nn = new_name(name, db, style, missing)
                 reason = ('ID not in db: ' + ', '.join(sorted(missing))) if missing else 'already named'
             else:
-                nn, reason = name, 'no game ID in name'
+                nn, reason = name, problem[1] if problem else 'no game ID in name'
             unknown |= missing
             # a pkg sitting directly in root goes into its game's folder
             subdir, create = game_dir(root, info[0], db, style, planned) if info and dp == root else ('', False)
@@ -598,6 +651,8 @@ def rename_all(root, db, style, apply, undo_log, log):
             f.write(f'# {datetime.now().isoformat()}\n')
             for s, d in done:
                 f.write(f'{s}\t{d}\n')
+    if bad_pkgs:
+        print(f'{bad_pkgs} pkg(s) could not be read and were left as they are (see ERRORS in the log)')
     if unknown:
         print('IDs not in db (no base/patch pkg to read a title from; add them to the db manually):',
               ', '.join(sorted(unknown)))
