@@ -14,15 +14,16 @@ Usage:
   ps4_rename.py [PATH] --clean-logs    delete rename_results_*.log (keeps rename_undo.log)
 
 Name style (for a rename run; a later run with other options re-styles everything):
-  <game>[ <version>][ <content ID>]_base.pkg | _patch.pkg      (type suffix always last)
-  <game>_<DLC title>[ <version>][ <content ID>]_dlc.pkg
-  --keep-id          <game> = title + ID      Bloodborne [CUSA00900]_patch.pkg
-  --no-title         <game> = ID only         CUSA00900_patch.pkg
-  --add-version      version tag              Bloodborne [v1.09]_patch.pkg
-  --add-content-id   content ID tag           Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000]_patch.pkg
-  --sep SEP          SEP instead of spaces    --sep _ : Bloodborne_[CUSA00900]_[v1.09]_patch.pkg
-  --no-brackets      tags without [ ]         Bloodborne CUSA00900 v1.09_patch.pkg
-  Folders get <game> only; version and content ID go on .pkg files.
+  <game>[ <version>][ <content ID>][ <type>].pkg          type = [base] / [patch] / [dlc], always last
+  <game>_<DLC title>[ <version>][ <content ID>][ <type>].pkg
+  --keep-id          <game> = title + ID      Bloodborne [CUSA00900] [patch].pkg
+  --no-title         <game> = ID only         CUSA00900 [patch].pkg
+  --add-version      version tag              Bloodborne [v1.09] [patch].pkg
+  --add-content-id   content ID tag           Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [patch].pkg
+  --no-type          no type tag              Bloodborne [v1.09].pkg
+  --sep SEP          SEP instead of spaces    --sep _ : Bloodborne_[CUSA00900]_[v1.09]_[patch].pkg
+  --no-brackets      tags without [ ]         Bloodborne CUSA00900 v1.09 patch.pkg
+  Folders get <game> only; version, content ID and type go on .pkg files.
 
 --build-db looks up an English name online (English Wikipedia, then Wikidata)
 for any title in Japanese/Korean/Chinese and stores it in the db.
@@ -337,12 +338,13 @@ class Style:
     no_title     title ID instead of the game title       CUSA00900
     sep          replaces the spaces in generated names   ' ' (default), '_', '.', '' ...
     brackets     put tags in [ ]
+    no_type      leave out the type tag                   [base] / [patch] / [dlc]
     """
 
     def __init__(self, keep_id=False, add_version=False, add_cid=False, no_title=False,
-                 sep=' ', brackets=True):
+                 sep=' ', brackets=True, no_type=False):
         self.keep_id, self.add_version, self.add_cid = keep_id, add_version, add_cid
-        self.no_title, self.sep, self.brackets = no_title, sep, brackets
+        self.no_title, self.sep, self.brackets, self.no_type = no_title, sep, brackets, no_type
 
     def tag(self, text):
         return f'[{text}]' if self.brackets else text
@@ -437,10 +439,11 @@ def version_tag(ver):
 
 
 def pkg_name(info, db, style, unknown):
-    """File name from a pkg's param.sfo, type suffix always last:
-    <game>[ <version>][ <content ID>]_base.pkg / _patch.pkg
-    <game>_<DLC title>[ <version>][ <content ID>]_dlc.pkg
-    where <game> is the title (+ ID with --keep-id) or the ID (--no-title)."""
+    """File name from a pkg's param.sfo, type tag always last:
+    <game>[ <version>][ <content ID>] [base].pkg / [patch].pkg
+    <game>_<DLC title>[ <version>][ <content ID>] [dlc].pkg
+    where <game> is the title (+ ID with --keep-id) or the ID (--no-title); tags are joined
+    with --sep, bracketed unless --no-brackets, and the type tag is left out with --no-type."""
     gid, kind, dlc, ver, cid = info
     if gid not in db:
         unknown.add(gid)
@@ -456,7 +459,9 @@ def pkg_name(info, db, style, unknown):
         tags.append(style.tag(version_tag(ver)))
     if style.add_cid and cid:
         tags.append(style.tag(cid))
-    return windows_safe(f'{style.join(head, *tags)}_{kind}') + '.pkg'
+    if not style.no_type:
+        tags.append(style.tag(kind))
+    return windows_safe(style.join(head, *tags)) + '.pkg'
 
 
 def folder_gid(path):
@@ -571,7 +576,8 @@ def rename_all(root, db, style, apply, undo_log, log):
             target = os.path.join(subdir, nn) if subdir else nn
             key = os.path.normcase(os.path.abspath(dst))
             if key in claimed or (os.path.exists(lp(dst)) and not same_file(src, dst)):  # same file = case-only
-                hint = ' (use --add-version to tell patches/versions apart)' if key in claimed else ''
+                hint = (' (use --add-version to tell versions apart'
+                        + (', or drop --no-type' if style.no_type else '') + ')') if key in claimed else ''
                 log.error(relpath, f'target already exists: {target}{hint}')
                 continue
             claimed.add(key)
@@ -895,16 +901,18 @@ def main():
                          '(preview; add --apply to do it)')
     ap.add_argument('--keep-id', action='store_true', help='keep the ID after the title, e.g. "Bloodborne [CUSA00900]"')
     ap.add_argument('--no-title', action='store_true',
-                    help='use the title ID instead of the game title, e.g. "CUSA00900_patch.pkg"')
+                    help='use the title ID instead of the game title, e.g. "CUSA00900 [patch].pkg"')
     ap.add_argument('--add-version', action='store_true',
-                    help='add the pkg version to .pkg names, e.g. "Bloodborne [v1.09]_patch.pkg"')
+                    help='add the pkg version to .pkg names, e.g. "Bloodborne [v1.09] [patch].pkg"')
     ap.add_argument('--add-content-id', action='store_true',
-                    help='add the content ID to .pkg names, e.g. "Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000]_base.pkg"')
+                    help='add the content ID to .pkg names, e.g. "Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [base].pkg"')
     ap.add_argument('--sep', default=' ', metavar='SEP',
                     help='separator used instead of spaces in generated names, e.g. "_" or "." '
                          '(default: space; "" for none)')
     ap.add_argument('--no-brackets', action='store_true',
-                    help='write tags without [ ], e.g. "Bloodborne CUSA00900 v1.09_patch.pkg"')
+                    help='write tags without [ ], e.g. "Bloodborne CUSA00900 v1.09 patch.pkg"')
+    ap.add_argument('--no-type', action='store_true',
+                    help='leave out the [base] / [patch] / [dlc] tag, e.g. "Bloodborne [v1.09].pkg"')
     ap.add_argument('--build-db', action='store_true', help='add games to the db from param.sfo inside *.pkg files')
     ap.add_argument('--rebuild', action='store_true', help='with --build-db: start a fresh db (drops old entries)')
     ap.add_argument('--offline', action='store_true', help="don't look up English names online when building the db")
@@ -922,7 +930,7 @@ def main():
         ap.error('--keep-logs must be 0 or more')
     if any(c in '\\/:*?"<>|' or ord(c) < 32 for c in a.sep):
         ap.error('--sep can\'t contain \\ / : * ? " < > | or control characters')
-    style = Style(a.keep_id, a.add_version, a.add_content_id, a.no_title, a.sep, not a.no_brackets)
+    style = Style(a.keep_id, a.add_version, a.add_content_id, a.no_title, a.sep, not a.no_brackets, a.no_type)
     a.root = os.path.abspath(a.root)
     if not os.path.isdir(a.root):
         ap.error(f'not a directory: {a.root}')

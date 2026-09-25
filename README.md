@@ -1,14 +1,14 @@
 # ps4-pkg-title-renamer
 
-Renames PS4 PKG files to a consistent `<ID>_base` / `_patch` / `_<DLC>_dlc` scheme, puts each game in its own folder, and replaces title IDs (`CUSA00900`, `CHTM00777`, ...) with the game's title.
+Renames PS4 PKG files to a consistent `<game> [base]` / `[patch]` / `_<DLC> [dlc]` scheme, puts each game in its own folder, and replaces title IDs (`CUSA00900`, `CHTM00777`, ...) with the game's title.
 
 ```
 CUSA00900/                                   Bloodborne/
-├── CUSA00900_base.pkg                ->     ├── Bloodborne_base.pkg
-├── update.pkg                               ├── Bloodborne_patch.pkg
-└── Bloodborne The Old Hunters.pkg           └── Bloodborne_The Old Hunters_dlc.pkg
+├── CUSA00900_base.pkg                ->     ├── Bloodborne [base].pkg
+├── update.pkg                               ├── Bloodborne [patch].pkg
+└── Bloodborne The Old Hunters.pkg           └── Bloodborne_The Old Hunters [dlc].pkg
 CUSA11253_base.pkg  (loose in root)          Dead Cells/
-                                             └── Dead Cells_base.pkg
+                                             └── Dead Cells [base].pkg
 ```
 
 - Reads titles directly from the `param.sfo` inside each `.pkg`, so no guessing or online title-ID database is needed
@@ -157,11 +157,12 @@ Re-run the link command if you move the script.
 | `--undo-last` | Revert only the most recent `--apply` run. Previews unless `--apply` is added |
 | `--undo-match TEXT` | Revert only renames whose path contains `TEXT`. Previews unless `--apply` is added |
 | `--keep-id` | Keep the ID after the title: `Bloodborne [CUSA00900]` |
-| `--no-title` | Use the title ID instead of the game title: `CUSA00900_patch.pkg` |
-| `--add-version` | Add the PKG version to `.pkg` names: `Bloodborne [v1.09]_patch.pkg` |
-| `--add-content-id` | Add the content ID to `.pkg` names: `Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000]_base.pkg` |
-| `--sep SEP` | Use `SEP` instead of spaces in generated names: `--sep _` gives `Grand_Theft_Auto_V_patch.pkg`. `""` means no separator |
-| `--no-brackets` | Write tags without `[ ]`: `Bloodborne CUSA00900 v1.09_patch.pkg` |
+| `--no-title` | Use the title ID instead of the game title: `CUSA00900 [patch].pkg` |
+| `--add-version` | Add the PKG version to `.pkg` names: `Bloodborne [v1.09] [patch].pkg` |
+| `--add-content-id` | Add the content ID to `.pkg` names: `Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [base].pkg` |
+| `--no-type` | Leave out the `[base]` / `[patch]` / `[dlc]` tag: `Bloodborne [v1.09].pkg` |
+| `--sep SEP` | Use `SEP` instead of spaces in generated names: `--sep _` gives `Grand_Theft_Auto_V_[patch].pkg`. `""` means no separator |
+| `--no-brackets` | Write tags without `[ ]`: `Bloodborne CUSA00900 v1.09 patch.pkg` |
 | `--build-db` | Add games to the db from the `.pkg` files in `PATH` |
 | `--rebuild` | With `--build-db`: start a fresh db, dropping old entries |
 | `--offline` | Skip the English-name lookup when building the db |
@@ -208,29 +209,31 @@ CUSA32997: 怒首領蜂大往生 臨廻転生   ->  DoDonPachi DaiOuJou
 
 ## Naming scheme
 
-Every PS4 PKG is named from its own `param.sfo`, whatever it's currently called. The type suffix, `_base`, `_patch` or `_dlc`, is always the last part of the name:
+Every PS4 PKG is named from its own `param.sfo`, whatever it's currently called. The PKG type is a tag like the others, `[base]`, `[patch]` or `[dlc]`, and it's always the last tag:
 
 ```
-<game>[ <version>][ <content ID>]_base.pkg
-<game>[ <version>][ <content ID>]_patch.pkg
-<game>_<DLC title>[ <version>][ <content ID>]_dlc.pkg
+<game>[ <version>][ <content ID>] [base].pkg
+<game>[ <version>][ <content ID>] [patch].pkg
+<game>_<DLC title>[ <version>][ <content ID>] [dlc].pkg
 ```
+
+The type tag follows `--sep` and `--no-brackets` like every other tag, and `--no-type` leaves it out.
 
 `<game>` is the game title by default, the title plus its ID with `--keep-id`, or only the ID with `--no-title`. Folders are named `<game>`.
 
 | `CATEGORY` in param.sfo | Type | Default | `--keep-id` | `--no-title` |
 |---|---|---|---|---|
-| `gd`, `gde` | base game / app | `Bloodborne_base.pkg` | `Bloodborne [CUSA00900]_base.pkg` | `CUSA00900_base.pkg` |
-| `gp` | patch | `Bloodborne_patch.pkg` | `Bloodborne [CUSA00900]_patch.pkg` | `CUSA00900_patch.pkg` |
-| `ac` | DLC / add-on | `Bloodborne_The Old Hunters_dlc.pkg` | `Bloodborne [CUSA00900]_The Old Hunters_dlc.pkg` | `CUSA00900_Bloodborne The Old Hunters_dlc.pkg` |
+| `gd`, `gde` | base game / app | `Bloodborne [base].pkg` | `Bloodborne [CUSA00900] [base].pkg` | `CUSA00900 [base].pkg` |
+| `gp` | patch | `Bloodborne [patch].pkg` | `Bloodborne [CUSA00900] [patch].pkg` | `CUSA00900 [patch].pkg` |
+| `ac` | DLC / add-on | `Bloodborne_The Old Hunters [dlc].pkg` | `Bloodborne [CUSA00900]_The Old Hunters [dlc].pkg` | `CUSA00900_Bloodborne The Old Hunters [dlc].pkg` |
 | folder | | `Bloodborne/` | `Bloodborne [CUSA00900]/` | `CUSA00900/` |
 
-- **DLC names:** the DLC title comes from the DLC PKG's `param.sfo`. If it starts with the game title, that part is dropped because the name already starts with it: "Bloodborne The Old Hunters" becomes `Bloodborne_The Old Hunters_dlc.pkg`. With `--no-title`, the DLC title is kept whole.
+- **DLC names:** the DLC title comes from the DLC PKG's `param.sfo`. If it starts with the game title, that part is dropped because the name already starts with it: "Bloodborne The Old Hunters" becomes `Bloodborne_The Old Hunters [dlc].pkg`. With `--no-title`, the DLC title is kept whole.
 - **Folders:**
   - A folder with a title ID in its name is renamed to its game's name, keeping any other text: `CUSA00900 backup/` becomes `Bloodborne backup/`.
   - A folder without an ID is only renamed when its name starts with the game title and all the PKGs directly inside it belong to that game. That's what lets a folder renamed earlier as `Bloodborne/` be switched to `CUSA00900/` or `Bloodborne [CUSA00900]/`.
 - **Other files:** files that aren't PS4 PKGs and have no ID, such as logs, are left alone.
-- **Duplicate names:** two patches for the same game in one folder would both become `_patch.pkg`. The second one is logged as an error and left as it is. Dry runs catch this too. Use `--add-version` to give each patch its own name, e.g. `Bloodborne [v1.04]_patch.pkg` and `Bloodborne [v1.09]_patch.pkg`.
+- **Duplicate names:** two patches for the same game in one folder would both become `Bloodborne [patch].pkg`. The second one is logged as an error and left as it is. Dry runs catch this too. Use `--add-version` to give each patch its own name, e.g. `Bloodborne [v1.04] [patch].pkg` and `Bloodborne [v1.09] [patch].pkg`. With `--no-type`, a base game and its patch collide the same way, so combine `--no-type` with `--add-version`.
 
 ### Name style options
 
@@ -238,38 +241,45 @@ These options can be combined freely:
 
 | Option | Effect | Applies to | Example |
 |---|---|---|---|
-| `--keep-id` | adds the title ID after the title | folders and files | `Bloodborne [CUSA00900]_patch.pkg` |
-| `--no-title` | uses the title ID instead of the game title | folders and files | `CUSA00900_patch.pkg` |
-| `--add-version` | adds a version tag before the type suffix | `.pkg` files | `Bloodborne [v1.09]_patch.pkg` |
-| `--add-content-id` | adds a content ID tag before the type suffix | `.pkg` files | `Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000]_patch.pkg` |
-| `--sep SEP` | uses `SEP` instead of spaces, in titles and between tags | folders and files | `--sep _`: `Grand_Theft_Auto_V_[CUSA00419]_patch.pkg` |
-| `--no-brackets` | writes tags without `[ ]` | folders and files | `Bloodborne CUSA00900 v1.09_patch.pkg` |
+| `--keep-id` | adds the title ID after the title | folders and files | `Bloodborne [CUSA00900] [patch].pkg` |
+| `--no-title` | uses the title ID instead of the game title | folders and files | `CUSA00900 [patch].pkg` |
+| `--add-version` | adds a version tag before the type tag | `.pkg` files | `Bloodborne [v1.09] [patch].pkg` |
+| `--add-content-id` | adds a content ID tag before the type tag | `.pkg` files | `Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [patch].pkg` |
+| `--no-type` | leaves out the type tag | `.pkg` files | `Bloodborne [v1.09].pkg` |
+| `--sep SEP` | uses `SEP` instead of spaces, in titles and between tags | folders and files | `--sep _`: `Grand_Theft_Auto_V_[CUSA00419]_[patch].pkg` |
+| `--no-brackets` | writes tags without `[ ]` | folders and files | `Bloodborne CUSA00900 v1.09 patch.pkg` |
 
 Examples with several options:
 
 ```
 --keep-id --add-version --add-content-id
 Bloodborne [CUSA00900]/
-├── Bloodborne [CUSA00900] [v1.00] [UP9000-CUSA00900_00-BLOODBORNE000000]_base.pkg
-├── Bloodborne [CUSA00900] [v1.09] [UP9000-CUSA00900_00-BLOODBORNE000000]_patch.pkg
-└── Bloodborne [CUSA00900]_The Old Hunters [v1.00] [UP9000-CUSA00900_00-SPEXPANSIONDLC03]_dlc.pkg
+├── Bloodborne [CUSA00900] [v1.00] [UP9000-CUSA00900_00-BLOODBORNE000000] [base].pkg
+├── Bloodborne [CUSA00900] [v1.09] [UP9000-CUSA00900_00-BLOODBORNE000000] [patch].pkg
+└── Bloodborne [CUSA00900]_The Old Hunters [v1.00] [UP9000-CUSA00900_00-SPEXPANSIONDLC03] [dlc].pkg
 
 --keep-id --add-version --sep _
 Grand_Theft_Auto_V_[CUSA00419]/
-└── Grand_Theft_Auto_V_[CUSA00419]_[v13.37]_patch.pkg
+└── Grand_Theft_Auto_V_[CUSA00419]_[v13.37]_[patch].pkg
 
 --no-title --add-version --no-brackets
 CUSA00900/
-├── CUSA00900 v1.09_patch.pkg
-└── CUSA00900_Bloodborne The Old Hunters v1.00_dlc.pkg
+├── CUSA00900 v1.09 patch.pkg
+└── CUSA00900_Bloodborne The Old Hunters v1.00 dlc.pkg
+
+--add-version --no-type
+Bloodborne/
+├── Bloodborne [v1.00].pkg
+├── Bloodborne [v1.09].pkg
+└── Bloodborne_The Old Hunters [v1.00].pkg
 ```
 
 - **Version:** read from the PKG's `param.sfo`. Base games and patches use `APP_VER`, the version the game is at after installing, e.g. a patch to 1.09 gives `v1.09`. DLC has no `APP_VER`, so its `VERSION` is used. Leading zeros are dropped, so `01.09` becomes `v1.09`.
 - **Content ID:** the PKG's full content ID, `<region prefix>-<title ID>_00-<label>`. It's unique per PKG: each DLC has its own, and a base game and its patches share one. The prefix also shows the region: `UP` = USA, `EP` = EUR, `JP` = JPN, `HP` = Asia.
-- **Folders:** version and content ID are only added to `.pkg` files, because a folder holds several PKGs with different versions.
+- **Folders:** version, content ID and type are only added to `.pkg` files, because a folder holds several PKGs of different versions and types.
 - **`--sep`:**
   - `SEP` can be any characters that are valid in file names, e.g. `_`, `.` or `-`. `--sep ""` removes spaces entirely.
-  - It replaces the spaces the script generates, in titles, DLC titles and between tags. The `_` before the type suffix and before a DLC title is part of the scheme and stays.
+  - It replaces the spaces the script generates, in titles, DLC titles and between tags, including before the type tag. The `_` before a DLC title is part of the scheme and stays.
   - Text the script doesn't generate keeps its spaces, e.g. `backup` in `Bloodborne backup/`.
 - **`--no-brackets`:** tags are then separated only by `SEP`. The script still recognises its own names when you switch styles later.
 - **Switching styles:** each style is applied in full on every run. See [Running again](#running-again).
@@ -290,11 +300,11 @@ Each run applies the naming options you give to everything, so re-running never 
 - **Different options:** a run with different options re-styles existing names instead of adding to them. So you can switch styles at any time:
 
   ```
-  (default)                  Bloodborne/Bloodborne_patch.pkg
-  --keep-id --add-version    Bloodborne [CUSA00900]/Bloodborne [CUSA00900] [v1.09]_patch.pkg
-  --no-title                 CUSA00900/CUSA00900_patch.pkg
-  --keep-id --sep _          Bloodborne_[CUSA00900]/Bloodborne_[CUSA00900]_patch.pkg
-  (default)                  Bloodborne/Bloodborne_patch.pkg
+  (default)                  Bloodborne/Bloodborne [patch].pkg
+  --keep-id --add-version    Bloodborne [CUSA00900]/Bloodborne [CUSA00900] [v1.09] [patch].pkg
+  --no-title --no-type       CUSA00900/CUSA00900.pkg
+  --keep-id --sep _          Bloodborne_[CUSA00900]/Bloodborne_[CUSA00900]_[patch].pkg
+  (default)                  Bloodborne/Bloodborne [patch].pkg
   ```
 
 - **Where names come from:** PKG names are rebuilt from `param.sfo` every time. Folder names are rebuilt from the title ID in the name, or from the PKGs inside.
@@ -337,7 +347,7 @@ python3 ps4-pkg-title-renamer/ps4_rename.py ../other-games --undo-last --apply
 A preview lists every rename it would revert as `current name -> original name` and changes nothing:
 
 ```
-/games/Bloodborne/Bloodborne_The Old Hunters_dlc.pkg -> /games/Bloodborne/Bloodborne The Old Hunters.pkg  (preview)
+/games/Bloodborne/Bloodborne_The Old Hunters [dlc].pkg -> /games/Bloodborne/Bloodborne The Old Hunters.pkg  (preview)
 
 Preview only. Re-run with --apply to undo.
 ```
@@ -345,8 +355,8 @@ Preview only. Re-run with --apply to undo.
 ### How `--undo-match` finds renames
 
 - **What's compared:** the text is compared, ignoring case, with the old and the new path of each rename, relative to `PATH`.
-- **Folder names:** a game or folder name matches the folder and everything in it. `Bloodborne` matches `Bloodborne/`, `Bloodborne_base.pkg`, `Bloodborne_The Old Hunters_dlc.pkg` and so on.
-- **Title IDs:** an ID only matches where it appears in the old or new name. Folders and base/patch files always had the ID in their original name. A DLC file without `--keep-id` usually didn't, e.g. `Bloodborne The Old Hunters.pkg` became `Bloodborne_The Old Hunters_dlc.pkg`. Use the game name to catch a whole game.
+- **Folder names:** a game or folder name matches the folder and everything in it. `Bloodborne` matches `Bloodborne/`, `Bloodborne [base].pkg`, `Bloodborne_The Old Hunters [dlc].pkg` and so on.
+- **Title IDs:** an ID only matches where it appears in the old or new name. Folders and base/patch files always had the ID in their original name. A DLC file without `--keep-id` usually didn't, e.g. `Bloodborne The Old Hunters.pkg` became `Bloodborne_The Old Hunters [dlc].pkg`. Use the game name to catch a whole game.
 - **Check first:** run without `--apply` to see exactly what matches.
 
 ### What undo takes care of
@@ -371,13 +381,13 @@ All logs are kept in the script's folder, not in `PATH`. In a git clone, `.gitig
 
 ```
 === CHANGED (143) ===
-CUSA00900/CUSA00900_base.pkg  ->  Bloodborne_base.pkg
+CUSA00900/CUSA00900_base.pkg  ->  Bloodborne [base].pkg
 === NOT CHANGED (39) ===
 itemzflow/daemon.log  (no game ID in name)
-Bloodborne [CUSA00900]/Bloodborne [CUSA00900]_base.pkg  (already named)
+Bloodborne [CUSA00900]/Bloodborne [CUSA00900] [base].pkg  (already named)
 CUSA99999  (ID not in db: CUSA99999)
 === ERRORS (1) ===
-CUSA00900/CUSA00900_patch.pkg  (target already exists: Bloodborne_patch.pkg)
+CUSA00900/CUSA00900_patch.pkg  (target already exists: Bloodborne [patch].pkg)
 ```
 
 `--apply` also records every rename in `rename_undo.log`, which the undo options use. See [Undo](#undo).
