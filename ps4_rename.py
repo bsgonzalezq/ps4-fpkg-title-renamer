@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Rename PS4 pkgs to <ID>_base / _patch / _<DLC title>_dlc .pkg (type read from param.sfo),
-move loose pkgs into their game folder, and replace title IDs (CUSA12345, ...) with game titles.
+"""Rename PS4 pkgs from their param.sfo to "<game> [base|patch|dlc].pkg" with optional ID, version,
+content ID and region tags, move loose pkgs into their game folder, and replace title IDs
+(CUSA12345, ...) in folder names with game titles.
 
 Usage:
   ps4_rename.py [PATH]                 dry run in PATH (default: current directory)
@@ -43,7 +44,7 @@ Works on Linux, macOS and Windows 10/11 (use `py` or `python` instead of `python
 
 DB (ps4_titles.db, plain text, '#' comments; edits are kept, --build-db --rebuild starts over):
   GAMES:  TitleID|Title|Region                          CUSA00900|Bloodborne™|USA
-  PKGS:   ContentID|Version|Type|TitleID|DLC title      UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunters
+  PKGS:   ContentID|Version|Type|TitleID|Title          UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunters
   Game titles and DLC titles are used for names; edit them to rename.
 """
 import argparse, json, os, platform, re, shutil, struct, subprocess, sys, time, unicodedata
@@ -116,11 +117,16 @@ def windows_safe(name):
 
 class TitleDB(dict):
     """The title db: {title_id: (title, region)} plus .pkgs, one entry per pkg file:
-    {(content_id, type, version): (title_id, dlc_title)}."""
+    {(content_id, type, version): (title_id, pkg_title)}; pkg_title is the title in the pkg
+    (the DLC's name for DLC, the game title as the pkg spells it for base games/patches)."""
 
     def __init__(self, *args):
         super().__init__(*args)
         self.pkgs = {}
+
+    def pkg_titles(self, gid):
+        """Game titles as spelled in this game's base/patch pkgs."""
+        return {t for (_, kind, _), (g, t) in self.pkgs.items() if g == gid and kind != 'dlc' and t}
 
     def dlc_title(self, cid):
         """DLC title stored for a DLC content ID (any version), or None."""
@@ -322,8 +328,8 @@ def write_db(db, path):
         f.write('# GAMES: TitleID|Title|Region  (USA/EUR/JPN/ASIA/KOR, HB = homebrew)\n')
         for gid in sorted(db):
             f.write(f'{gid}|{db[gid][0]}|{db[gid][1]}\n')
-        f.write('\n# PKGS: ContentID|Version|Type|TitleID|DLC title  (one line per pkg file and version;\n'
-                '#   type/version come from the pkg; the DLC title is used for [dlc] names)\n')
+        f.write('\n# PKGS: ContentID|Version|Type|TitleID|Title  (one line per pkg file and version;\n'
+                '#   Title = the title in the pkg; for DLC it is the DLC name used in [dlc] names: edit it to rename)\n')
         for (cid, kind, ver) in sorted(pkgs, key=lambda k: (pkgs[k][0], k[1] != 'base', k[1], k[0], k[2])):
             gid, dlc = pkgs[(cid, kind, ver)]
             f.write(f'{cid}|{ver}|{kind}|{gid}|{dlc}\n')
@@ -375,11 +381,15 @@ def build_db(root, path, rebuild=False, offline=False):
             if not kind:
                 continue
             gid, _, dlc, ver, pcid = _pkg_tuple(cid, sfo, kind)
+            ptitle = dlc if kind == 'dlc' else (sfo.get('TITLE_01') or sfo.get('TITLE') or '')
             # one line per pkg file and version; existing (possibly hand-edited) lines are kept
-            if (pcid, kind, ver) not in db.pkgs:
-                db.pkgs[(pcid, kind, ver)] = (gid, db.dlc_title(pcid) or dlc if kind == 'dlc' else '')
+            key = (pcid, kind, ver)
+            if key not in db.pkgs:
+                db.pkgs[key] = (gid, (db.dlc_title(pcid) or ptitle) if kind == 'dlc' else ptitle)
                 new_pkgs += 1
-                print(f'  + {pcid}|{ver}|{kind}|{gid}|{db.pkgs[(pcid, kind, ver)][1]}')
+                print(f'  + {pcid}|{ver}|{kind}|{gid}|{db.pkgs[key][1]}')
+            elif not db.pkgs[key][1] and ptitle:  # lines from before titles were recorded
+                db.pkgs[key] = (db.pkgs[key][0], ptitle)
             # game titles from base games/apps; patches carry the game title too (used when no base)
             prio = {'base': 0, 'patch': 1}.get(kind)
             if prio is None or gid in db:
@@ -574,8 +584,14 @@ def pkg_name(info, db, style, unknown):
         dlc = (db.dlc_title(cid) if hasattr(db, 'dlc_title') else None) or dlc
         d = re.sub(r'\s+', ' ', dlc.translate(BAD)).strip()
         if gid in db and not style.no_title:
-            # drop the game title from the DLC title, the name already starts with it
-            d = strip_prefix(d, safe_title(db, gid)).strip(' -–_.') or d
+            # drop the game title from the DLC title, the name already starts with it; try the
+            # db title and the title as the game's own pkgs spell it (the db one may be edited)
+            titles = [safe_title(db, gid)] + sorted(getattr(db, 'pkg_titles', lambda g: set())(gid))
+            for t in sorted(titles, key=lambda t: -len(_alnum(t))):
+                cut = strip_prefix(d, t.translate(BAD))
+                if cut != d:
+                    d = cut.strip(' -–_.') or d
+                    break
         head = f'{head}_{style.spaced(d)}'
     tags = []
     if style.add_version and version_tag(ver):
@@ -603,20 +619,31 @@ def folder_gid(path):
 
 
 def folder_name(name, path, db, style, unknown):
-    """New name for a folder: IDs in the name are re-styled; a folder without an ID whose name
-    starts with its game's title (e.g. "Bloodborne", renamed earlier without --keep-id) is
-    re-styled from the game its pkgs belong to. Returns (new_name, reason)."""
+    """New name for a folder. Returns (new_name, reason).
+
+    A folder whose pkgs all belong to one game is that game's folder: it's named from the game
+    in the current style, whatever it's called now, so editing a title in the db renames it too.
+    Text after the title ID (or after the title) is kept: "CUSA00900 backup" -> "Bloodborne backup".
+    Other folders only get the IDs in their name re-styled."""
+    gid = folder_gid(path)
+    if gid and gid in db:
+        m = None
+        for m in ANY_ID_RE.finditer(name):  # last occurrence of this game's ID
+            pass
+        if m and m.group(2) == gid:
+            rest = name[m.end():]
+        elif _alnum(name).startswith(_alnum(safe_title(db, gid)) or '\0'):
+            rest = strip_prefix(name, safe_title(db, gid))
+        else:
+            rest = ''
+        r = REGION_RE.match(rest)  # an old region tag is re-added (or not) by style.game
+        if r and r.end():
+            rest = rest[r.end():]
+        return windows_safe(style.game(db, gid) + rest), 'already named'
     if ID_RE.search(name):
         nn = new_name(name, db, style, unknown)
         return nn, ('ID not in db: ' + ', '.join(sorted(unknown))) if unknown else 'already named'
-    gid = folder_gid(path)
-    if not gid or gid not in db or not _alnum(name).startswith(_alnum(safe_title(db, gid)) or '\0'):
-        return name, 'no game ID in name'
-    rest = strip_prefix(name, safe_title(db, gid))
-    r = REGION_RE.match(rest)  # an old region tag is re-added (or not) by style.game
-    if r and r.end():
-        rest = rest[r.end():]
-    return windows_safe(style.game(db, gid) + rest), 'already named'
+    return name, 'no game ID in name'
 
 
 class ResultLog:

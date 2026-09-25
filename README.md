@@ -185,9 +185,9 @@ CUSA07439|DARK SOULS™ III|EUR
 CUSA10207|Battle Garegga Rev.2016|ASIA
 CHTM00777|PS4 Cheats Manager|HB
 
-# PKGS: ContentID|Version|Type|TitleID|DLC title
-UP9000-CUSA00900_00-BLOODBORNE000000|01.00|base|CUSA00900|
-UP9000-CUSA00900_00-BLOODBORNE000000|01.09|patch|CUSA00900|
+# PKGS: ContentID|Version|Type|TitleID|Title
+UP9000-CUSA00900_00-BLOODBORNE000000|01.00|base|CUSA00900|Bloodborne™
+UP9000-CUSA00900_00-BLOODBORNE000000|01.09|patch|CUSA00900|Bloodborne™
 UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunters
 ```
 
@@ -198,7 +198,7 @@ Every run reads each PKG's `param.sfo` anyway, so the db isn't a speed-up. It's 
 | The db | Without it |
 |---|---|
 | Remembers English names found online for Japanese/Korean titles | Every run would repeat the online lookups: slower, rate-limited, and needs internet |
-| Keeps your fixes: edit a game or DLC title and every run uses it | No way to change a name without editing the script |
+| Keeps your fixes: edit a game or DLC title and every run uses it ([Using the db](#using-the-db)) | No way to change a name without editing the script |
 | Keeps game titles for folders with only DLC, or no PKGs | DLC PKGs only contain the DLC's own name, so the game title would be unknown |
 | Gives one title per game, taken from the base game, for all its files | Patch PKGs sometimes word the title differently |
 | Holds the region used by `--add-region` | |
@@ -217,9 +217,60 @@ Every run reads each PKG's `param.sfo` anyway, so the db isn't a speed-up. It's 
   - **Version:** `APP_VER`, or `VERSION` for DLC.
   - **Type:** `base`, `patch` or `dlc`.
   - **TitleID:** the game the PKG belongs to.
-  - **DLC title:** the DLC's name. Empty for base games and patches.
-- **What's used for naming:** the DLC title is used in `[dlc]` names, so you can edit it to rename a DLC, e.g. to fix a Japanese-only DLC name. The game title is dropped from its start automatically, as in `Bloodborne_The Old Hunters [dlc].pkg`.
+  - **Title:** the title as written in that PKG. For DLC it's the DLC's name. For base games and patches it's the game title as the PKG spells it.
+- **What's used for naming:**
+  - **DLC:** the DLC's Title is used in `[dlc]` names, so you can edit it to rename a DLC, e.g. to fix a Japanese-only DLC name. The game title is dropped from its start automatically, as in `Bloodborne_The Old Hunters [dlc].pkg`.
+  - **Base games and patches:** their Title is used to recognise the original game title at the start of a DLC's name, even after you've edited the game's title in GAMES. Editing it changes nothing else.
 - **What's only a record:** type and version are always read from the PKG itself. The PKGS section is a record of your collection, and a newer patch simply adds a new line.
+
+### Using the db
+
+The db is plain text, so you can open it in any text editor. After editing, do a dry run to check the new names, then `--apply`. The examples assume the script's folder is `ps4-pkg-title-renamer/` inside your games folder.
+
+**Rename a game.** Edit its title in the GAMES section:
+
+```
+CUSA00900|Bloodborne™|USA             ->   CUSA00900|Bloodborne GOTY|USA
+```
+
+The game's folder and all its PKGs follow, in whatever style you use: `Bloodborne GOTY [CUSA00900]/Bloodborne GOTY [CUSA00900] [patch].pkg`. DLC names keep only the DLC part: `Bloodborne GOTY [CUSA00900]_The Old Hunters [dlc].pkg`. Use this to fix a lookup that missed an edition suffix, e.g. `DoDonPachi DaiOuJou` becomes `DoDonPachi DaiOuJou Re-incarnation`, or to shorten long titles.
+
+**Rename a DLC.** Edit the last field of its PKGS line:
+
+```
+UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunters
+                                                ->   ...|dlc|CUSA00900|The Old Hunters Expansion
+```
+
+This is the way to give a Japanese-only DLC an English name, since DLC titles are never looked up online. If a PKG isn't in the db yet, run a dry run first. It adds every new PKG to the db, so you can edit the line and then `--apply`.
+
+**Change or fix a region tag** (`--add-region`). Edit the Region field of the game. The recognised values are `USA`, `EUR`, `JPN`, `ASIA`, `KOR` and `HB`. Any other value is kept in the db but isn't added as a tag.
+
+**Name a game the script can't find.** A folder or file with a title ID but no base game or patch PKG, e.g. only DLC, is reported as `ID not in db`. Add a GAMES line yourself and run again:
+
+```
+CUSA12345|My Game|USA
+```
+
+**See what you have.** The PKGS section lists every PKG, with its type and version:
+
+```bash
+grep '|patch|' ps4-pkg-title-renamer/ps4_titles.db             # every patch and its version
+grep '|dlc|CUSA00900|' ps4-pkg-title-renamer/ps4_titles.db     # all DLC of one game
+grep 'CUSA00900' ps4-pkg-title-renamer/ps4_titles.db           # everything for one game
+```
+
+```powershell
+Select-String '\|patch\|' ps4-pkg-title-renamer\ps4_titles.db  # Windows
+```
+
+A game with several `patch` lines has had more than one patch version on your drive. The db keeps a line for each version it has seen.
+
+**Work offline.** Once the db holds the English names, runs don't need internet. `--offline` skips the online lookup for any new game.
+
+**Use the same names on another machine.** Copy `ps4_titles.db` next to the script there. Your edited titles, DLC names and English names come along. It's plain UTF-8 text, so it works on Linux, macOS and Windows.
+
+**Back up your edits.** Git ignores the db, so copy `ps4_titles.db` somewhere safe before `--build-db --rebuild`. A rebuild starts from the PKGs again and discards every edit.
 
 ### Updating the db
 
