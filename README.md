@@ -81,20 +81,34 @@ The script can live anywhere, and nothing in it depends on its location. The exa
 
 The script takes one optional `PATH`: the folder that holds your PKG folders. With no `PATH` it works on the current directory. `PATH` can be relative or absolute.
 
-**Run from the games folder**, with the script kept in a subfolder such as `PS4 Rename/`:
+Both examples use this layout, with the script in a subfolder of the games folder:
+
+```
+games/                  <- games folder (holds the PKG folders)
+├── CUSA00900/
+├── CUSA00419/
+└── PS4 Rename/         <- script folder
+    └── ps4_rename.py
+```
+
+**Option 1: your terminal is in the games folder** (`games/`). No `PATH` is needed because the current directory is already the games folder:
 
 ```bash
+cd games
 python3 "PS4 Rename/ps4_rename.py" --build-db   # 1. create ps4_titles.db from the .pkg files
 python3 "PS4 Rename/ps4_rename.py"              # 2. dry run: shows what would change
 python3 "PS4 Rename/ps4_rename.py" --apply      # 3. rename
 python3 "PS4 Rename/ps4_rename.py" --undo       #    revert, if needed
 ```
 
-**Run from the script's folder**, pointing at the games folder:
+**Option 2: your terminal is in the script folder** (`games/PS4 Rename/`). Pass `..`, the parent folder, as `PATH`:
 
 ```bash
-python3 ps4_rename.py .. --apply                # games folder is the parent directory
-python3 ps4_rename.py ../PS4 --apply            # or any other relative path
+cd "games/PS4 Rename"
+python3 ps4_rename.py .. --build-db
+python3 ps4_rename.py ..
+python3 ps4_rename.py .. --apply
+python3 ps4_rename.py .. --undo
 ```
 
 `ps4_titles.db`, the results logs and `rename_undo.log` are kept in `PATH`, so they stay with your games. If `PATH` has no `ps4_titles.db`, the one next to the script is used.
