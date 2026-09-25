@@ -557,7 +557,8 @@ def pkg_read(path):
 
 
 def pkg_info(path):
-    """(title_id, kind, dlc_title, version, content_id) from a pkg's param.sfo, or None."""
+    """(title_id, kind, pkg_title, version, content_id) from a pkg's param.sfo, or None.
+    pkg_title is the DLC's name for DLC, the game title as the pkg spells it otherwise."""
     return pkg_read(path)[0]
 
 
@@ -571,7 +572,8 @@ def pkg_version(sfo, kind):
 
 def _pkg_tuple(cid, sfo, kind):
     gid = sfo.get('TITLE_ID') or cid[7:16]
-    dlc = (sfo.get('TITLE_01') or sfo.get('TITLE') or cid[20:]) if kind == 'dlc' else ''
+    # the title in the pkg: the DLC's name for DLC, the game title as spelled by base/patch pkgs
+    dlc = sfo.get('TITLE_01') or sfo.get('TITLE') or (cid[20:] if kind == 'dlc' else '')
     ver = pkg_version(sfo, kind)
     content_id = sfo.get('CONTENT_ID') or cid
     return gid, kind, dlc, ver, re.sub(r'[^A-Za-z0-9_-]', '', content_id)
@@ -588,25 +590,33 @@ def pkg_name(info, db, style, unknown):
     <title>[ <ID>][ <region>][ <version>][ <content ID>] [base].pkg / [patch].pkg
     <title> <DLC title>[ <ID>][ <region>][ <version>][ <content ID>] [dlc].pkg
     <title> is the game title, or the ID with --no-title (then no separate ID tag). Parts are
-    joined with --sep, tags bracketed unless --no-brackets, the type tag left out with --no-type."""
-    gid, kind, dlc, ver, cid = info
+    joined with --sep, tags bracketed unless --no-brackets, the type tag left out with --no-type.
+    A base/patch Title edited in the db's PKGS section works like a DLC title: what it adds to
+    the game title goes right after it ("... Soundtrack Restoration Mod [patch].pkg")."""
+    gid, kind, ptitle, ver, cid = info
     if gid not in db:
         unknown.add(gid)
-    d = ''
+    pkgs = getattr(db, 'pkgs', {})
     if kind == 'dlc':
-        # the db's DLC title (translated or edited) wins over the one in the pkg
-        dlc = (db.dlc_title(cid) if hasattr(db, 'dlc_title') else None) or dlc
-        d = re.sub(r'\s+', ' ', dlc.translate(BAD)).strip()
-        if gid in db and not style.no_title:
-            # drop the game title from the DLC title, the name already starts with it; try the
-            # db title and the title as the game's own pkgs spell it (the db one may be edited)
-            titles = [safe_title(db, gid)] + sorted(getattr(db, 'pkg_titles', lambda g: set())(gid))
-            for t in sorted(titles, key=lambda t: -len(_alnum(t))):
-                cut = strip_prefix(d, t.translate(BAD))
-                if cut != d:
-                    d = cut.strip(' -–_.') or d
-                    break
-    head = style.game(db, gid, d)   # DLC title right after the game title, before the tags
+        # the db's DLC title (edited or not) wins over the one in the pkg
+        text = (db.dlc_title(cid) if hasattr(db, 'dlc_title') else None) or ptitle
+        titles = [safe_title(db, gid)] + sorted(db.pkg_titles(gid)) if gid in db and hasattr(db, 'pkg_titles') else []
+    else:
+        # base/patch: only a Title you edited in the db (different from the pkg's own) is used
+        line = pkgs.get((cid, kind, ver))
+        text = line[1] if line and line[1] and line[1] != ptitle else ''
+        titles = [safe_title(db, gid), ptitle] if gid in db else [ptitle]
+    d = re.sub(r'\s+', ' ', text.translate(BAD)).strip()
+    if d and gid in db and not style.no_title:
+        # drop the game title from the start, the name already starts with it; try the db title
+        # and the title as the game's own pkgs spell it (the db one may be edited)
+        for t in sorted((t for t in titles if t), key=lambda t: -len(_alnum(t))):
+            cut = strip_prefix(d, t.translate(BAD))
+            if cut != d:
+                cut = cut.strip(' -–_.')
+                d = cut or (d if kind == 'dlc' else '')
+                break
+    head = style.game(db, gid, d)   # DLC / edited title right after the game title, before the tags
     tags = []
     if style.add_version and version_tag(ver):
         tags.append(style.tag(version_tag(ver)))

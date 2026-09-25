@@ -258,7 +258,7 @@ Every run reads each PKG's `param.sfo` anyway, so the db isn't a speed-up. It's 
   - **Title:** the title as written in that PKG. For DLC it's the DLC's name. For base games and patches it's the game title as the PKG spells it.
 - **What's used for naming:**
   - **DLC:** the DLC's Title is used in `[dlc]` names, so you can edit it to rename a DLC, e.g. to fix a Japanese-only DLC name. It's placed right after the game title, before any tags, and a repeated game title at its start is dropped: `Bloodborne The Old Hunters [CUSA00900] [dlc].pkg`.
-  - **Base games and patches:** their Title is used to recognise the original game title at the start of a DLC's name, even after you've edited the game's title in GAMES. Editing it changes nothing else.
+  - **Base games and patches:** their Title is normally only a record. The script uses it to recognise the original game title at the start of a DLC's name, even after you've edited the game's title in GAMES. If you edit it, whatever you add goes into that PKG's name, like a DLC title. See [Using the db](#using-the-db).
 - **What's only a record:** type and version are always read from the PKG itself. The PKGS section is a record of your collection, and a newer patch simply adds a new line.
 
 ### Using the db
@@ -281,6 +281,18 @@ UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunt
 ```
 
 This is the way to give a Japanese-only DLC an English name, since DLC titles are never looked up online. If a PKG isn't in the db yet, run a dry run first. It adds every new PKG to the db, so you can edit the line and then `--apply`.
+
+**Label a patch or base game PKG,** e.g. a mod or a special build. Edit the Title field of its PKGS line and add your label:
+
+```
+UP1004-CUSA23501_00-GTATHREE00000001|01.08|patch|CUSA23501|Grand Theft Auto III – The Definitive Edition
+                     ->   ...|patch|CUSA23501|Grand Theft Auto III – The Definitive Edition Soundtrack Restoration Mod
+```
+
+On the next `--apply`, what you added goes right after the game title: `Grand Theft Auto III – The Definitive Edition Soundtrack Restoration Mod [CUSA23501] [v1.08] [patch].pkg`. You can also replace the whole Title, e.g. `Soundtrack Restoration Mod`. The game title is still added in front. To go back to the plain name, restore the original Title, i.e. what the PKG says.
+
+- **Only edited titles count:** a base or patch Title is used only when it differs from the title inside the PKG.
+- **One line per content ID, type and version:** a line applies to every PKG with the same content ID, type and version. A mod patch built from an official patch usually has exactly the same `param.sfo` values as that patch. If both are on the drive, they share one line, so the label applies to both, and they'd get the same name. The second one is then reported as an error and left alone.
 
 **Change or fix a region tag** (`--add-region`). Edit the Region field of the game. The recognised values are `USA`, `EUR`, `JPN`, `ASIA`, `KOR` and `HB`. Any other value is kept in the db but isn't added as a tag.
 
