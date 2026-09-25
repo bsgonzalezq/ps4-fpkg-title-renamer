@@ -252,7 +252,7 @@ Every run reads each PKG's `param.sfo` anyway, so the db isn't a speed-up. It's 
 
 - **Lines:** one line per PKG file and version.
   - **ContentID:** the PKG's content ID. A base game and its patches share one, and each DLC has its own.
-  - **Version:** `APP_VER`, or `VERSION` for DLC.
+  - **Version:** the version the PKG is known by. That's `APP_VER` for patches and `VERSION` for base games and DLC. See **Version** under [Name style options](#name-style-options).
   - **Type:** `base`, `patch` or `dlc`.
   - **TitleID:** the game the PKG belongs to.
   - **Title:** the title as written in that PKG. For DLC it's the DLC's name. For base games and patches it's the game title as the PKG spells it.
@@ -404,7 +404,13 @@ Bloodborne/
 └── Bloodborne The Old Hunters [v1.00].pkg
 ```
 
-- **Version:** read from the PKG's `param.sfo`. Base games and patches use `APP_VER`, the version the game is at after installing, e.g. a patch to 1.09 gives `v1.09`. DLC has no `APP_VER`, so its `VERSION` is used. Leading zeros are dropped, so `01.09` becomes `v1.09`.
+- **Version:** read from the PKG's `param.sfo`, and the field used depends on the type. Leading zeros are dropped, so `01.09` becomes `v1.09`:
+
+  | Type | Field | Why |
+  |---|---|---|
+  | patch | `APP_VER` | the version the patch updates the game to. A patch's `VERSION` is usually `01.00` |
+  | base game | `VERSION` | the version the base PKG was built at, e.g. `v1.07` for a base PKG that already contains updates. A base PKG's `APP_VER` is always `01.00` |
+  | DLC | `VERSION` | DLC has no `APP_VER` |
 - **Content ID:** the PKG's full content ID, `<region prefix>-<title ID>_00-<label>`. It's unique per PKG: each DLC has its own, and a base game and its patches share one. The prefix also shows the region: `UP` = USA, `EP` = EUR, `JP` = JPN, `HP` = Asia.
 - **Folders:** version, content ID and type are only added to `.pkg` files, because a folder holds several PKGs of different versions and types.
 - **`--sep`:**
@@ -545,6 +551,9 @@ Every PS4 game has a title ID such as `CUSA00900`, which is Bloodborne (USA). PK
 
 **How can I tell whether a PKG is the base game, a patch (update) or DLC?**
 The script reads the `CATEGORY` field in `param.sfo` (`gd` = base game, `gp` = patch, `ac` = DLC/add-on) and tags the file `[base]`, `[patch]` or `[dlc]`. Add `--add-version` to also see the version, e.g. `[v1.09]` for a patch.
+
+**Which version does `--add-version` show?**
+For a patch, the version it updates the game to (`APP_VER` in `param.sfo`). For a base game, the version the base PKG was built at (`VERSION`), because a base PKG's `APP_VER` is always `01.00`. For example, Vice City's base PKG is `v1.07` and its patch is `v1.08`.
 
 **Does it work with fake PKGs (fPKG), GoldHEN and Itemzflow?**
 It works with any PS4 PKG whose `param.sfo` can be read, which includes fake PKGs and homebrew. It only renames files and folders. It never changes the contents of a PKG, so the PKGs install the same way afterwards. Check whether your install tool expects ID-named folders. If it does, use `--keep-id` or `--no-title`.

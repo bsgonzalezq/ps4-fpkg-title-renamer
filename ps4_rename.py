@@ -19,7 +19,7 @@ Name style (for a rename run; a later run with other options re-styles everythin
   <game> = <title>[ <DLC title>][ <ID>][ <region>]         DLC title right after the game title
   --keep-id          <game> = title + ID      Bloodborne [CUSA00900] [patch].pkg
   --no-title         <game> = ID only         CUSA00900 [patch].pkg
-  --add-version      version tag              Bloodborne [v1.09] [patch].pkg
+  --add-version      version tag              Bloodborne [v1.09] [patch].pkg   (patch: APP_VER, base/DLC: VERSION)
   --add-content-id   content ID tag           Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [patch].pkg
   --no-type          no type tag              Bloodborne [v1.09].pkg
   --add-region       region tag after title   Bloodborne [CUSA00900] [USA] [patch].pkg
@@ -384,6 +384,10 @@ def build_db(root, path, rebuild=False, offline=False):
             ptitle = dlc if kind == 'dlc' else (sfo.get('TITLE_01') or sfo.get('TITLE') or '')
             # one line per pkg file and version; existing (possibly hand-edited) lines are kept
             key = (pcid, kind, ver)
+            old = (pcid, kind, sfo.get('APP_VER', ''))
+            if kind == 'base' and old != key and old in db.pkgs and key not in db.pkgs:
+                db.pkgs[key] = db.pkgs.pop(old)  # recorded with APP_VER (01.00) by older versions
+                print(f'  ~ {pcid}|{old[2]} -> {ver} (base version is VERSION, not APP_VER)')
             if key not in db.pkgs:
                 db.pkgs[key] = (gid, (db.dlc_title(pcid) or ptitle) if kind == 'dlc' else ptitle)
                 new_pkgs += 1
@@ -557,11 +561,18 @@ def pkg_info(path):
     return pkg_read(path)[0]
 
 
+def pkg_version(sfo, kind):
+    """The version a pkg is known by. Patches: APP_VER (the version the game is updated to;
+    their VERSION is usually 01.00). Base games: VERSION (the version the base pkg was built at;
+    their APP_VER is always 01.00). DLC: VERSION (it has no APP_VER)."""
+    first, second = ('APP_VER', 'VERSION') if kind == 'patch' else ('VERSION', 'APP_VER')
+    return sfo.get(first) or sfo.get(second) or ''
+
+
 def _pkg_tuple(cid, sfo, kind):
     gid = sfo.get('TITLE_ID') or cid[7:16]
     dlc = (sfo.get('TITLE_01') or sfo.get('TITLE') or cid[20:]) if kind == 'dlc' else ''
-    # APP_VER for games/patches; DLC only has VERSION
-    ver = sfo.get('APP_VER') or sfo.get('VERSION') or ''
+    ver = pkg_version(sfo, kind)
     content_id = sfo.get('CONTENT_ID') or cid
     return gid, kind, dlc, ver, re.sub(r'[^A-Za-z0-9_-]', '', content_id)
 
@@ -1068,7 +1079,8 @@ def main():
     ap.add_argument('--no-title', action='store_true',
                     help='use the title ID instead of the game title, e.g. "CUSA00900 [patch].pkg"')
     ap.add_argument('--add-version', action='store_true',
-                    help='add the pkg version to .pkg names, e.g. "Bloodborne [v1.09] [patch].pkg"')
+                    help='add the pkg version to .pkg names, e.g. "Bloodborne [v1.09] [patch].pkg" '
+                         '(patches: APP_VER; base games and DLC: VERSION)')
     ap.add_argument('--add-content-id', action='store_true',
                     help='add the content ID to .pkg names, e.g. "Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [base].pkg"')
     ap.add_argument('--sep', default=' ', metavar='SEP',
