@@ -13,8 +13,10 @@ for any title in Japanese/Korean/Chinese and stores it in the db.
 
 IDs missing from the db are added automatically (as --build-db) before renaming.
 
-Every run except --build-db writes rename_results_<action>_<timestamp>.log
-(sections: CHANGED, NOT CHANGED + reason, ERRORS).
+Logs are kept in the script's folder: every rename/undo run writes
+rename_results_<action>_<timestamp>.log (CHANGED, NOT CHANGED + reason, ERRORS),
+and --apply records renames in rename_undo.log for --undo.
+  ps4_rename.py [PATH] --clean-logs delete rename_results_*.log (keeps rename_undo.log)
 
 DB format (plain text, one per line, '#' comments):  ID|Title|Region
 """
@@ -22,9 +24,10 @@ import argparse, json, os, re, struct, sys, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.realpath(__file__))   # real script folder, even when run via a symlink
+UNDO_LOG = os.path.join(HERE, 'rename_undo.log')
 ID_RE = re.compile(r'(?<![A-Z])([A-Z]{4}\d{5})(?!\d)')
-SKIP = {'System Volume Information', '$RECYCLE.BIN', '.Trash-1000'}
+SKIP = {'System Volume Information', '$RECYCLE.BIN', '.Trash-1000', '.git'}
 REGIONS = {'UP': 'USA', 'EP': 'EUR', 'JP': 'JPN', 'HP': 'ASIA', 'KP': 'KOR'}
 # chars not allowed on exFAT/NTFS
 BAD = str.maketrans({':': ' - ', '/': '-', '\\': '-', '*': '', '?': '', '"': "'",
@@ -370,7 +373,7 @@ def rename_all(root, db, keep_id, apply, undo_log, log):
         if any(part in SKIP for part in rel.split(os.sep)):
             continue
         for name in fns + dns:
-            if name in SKIP or name in own or name.startswith('rename_results_'):
+            if name in SKIP or name in own or name.startswith(('rename_results_', 'rename_undo.log')):
                 continue
             relpath = os.path.normpath(os.path.join(rel, name))
             missing = set()
@@ -419,13 +422,36 @@ def rename_all(root, db, keep_id, apply, undo_log, log):
         print('Dry run only. Re-run with --apply to rename.')
 
 
-def undo(undo_log, log):
+def _under(path, root):
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def migrate_undo_log(root):
+    """Move a rename_undo.log left in PATH by older versions into the script folder."""
+    old = os.path.join(root, 'rename_undo.log')
+    if os.path.abspath(old) == UNDO_LOG or not os.path.isfile(old):
+        return
+    with open(old, encoding='utf-8') as f:
+        data = f.read()
+    with open(UNDO_LOG, 'a', encoding='utf-8') as f:
+        f.write(f'# migrated from {old}\n' + data + ('' if data.endswith('\n') else '\n'))
+    os.remove(old)
+    print(f'Moved undo history from {old} to {UNDO_LOG}\n')
+
+
+def undo(root, undo_log, log):
     if not os.path.exists(undo_log):
         sys.exit(f'No undo log: {undo_log}')
     with open(undo_log, encoding='utf-8') as f:
         pairs = [l.rstrip('\n').split('\t') for l in f if l.strip() and not l.startswith('#')]
+    # the log is shared by every PATH the script was run on: only undo entries under this one
+    mine = [p for p in pairs if _under(p[1], root)]
+    others = [p for p in pairs if not _under(p[1], root)]
+    if not mine:
+        sys.exit(f'Nothing to undo under {root} in {undo_log}')
+    failed = []
     # reverse order: parents renamed last are restored first
-    for src, dst in reversed(pairs):
+    for src, dst in reversed(mine):
         if src == 'MKDIR':  # folder created for a loose pkg: remove it once empty again
             try:
                 os.rmdir(dst)
@@ -436,6 +462,7 @@ def undo(undo_log, log):
             continue
         if not os.path.exists(dst):
             log.error(dst, 'renamed item no longer exists')
+            failed.append((src, dst))
         elif os.path.exists(src):
             log.keep(dst, f'original name already in use: {src}')
         else:
@@ -443,11 +470,36 @@ def undo(undo_log, log):
                 os.rename(dst, src)
             except OSError as e:
                 log.error(dst, f'restore failed: {e.strerror}')
+                failed.append((src, dst))
                 continue
             print(f'{dst} -> {src}')
             log.change(dst, src)
-    if not log.errors:
-        os.rename(undo_log, undo_log + '.done')
+    # keep entries for other folders (and failed ones, to retry); archive the rest
+    with open(undo_log + '.done', 'a', encoding='utf-8') as f:
+        f.write(f'# undone {datetime.now().isoformat()} under {root}\n')
+        f.writelines(f'{s}\t{d}\n' for s, d in mine)
+    keep = others + list(reversed(failed))
+    if keep:
+        with open(undo_log, 'w', encoding='utf-8') as f:
+            f.writelines(f'{s}\t{d}\n' for s, d in keep)
+    else:
+        os.remove(undo_log)
+
+
+def clean_logs(root):
+    """Delete results logs (script folder, plus old ones left in PATH); never rename_undo.log."""
+    found = set()
+    for d in {HERE, root}:
+        for fn in os.listdir(d):
+            if fn.startswith('rename_results_') and fn.endswith('.log'):
+                found.add(os.path.join(d, fn))
+    for p in sorted(found):
+        try:
+            os.remove(p)
+            print(f'deleted {p}')
+        except OSError as e:
+            print(f'could not delete {p}: {e.strerror}', file=sys.stderr)
+    print(f'{len(found)} log file(s) deleted; {UNDO_LOG} kept' if found else 'No results logs to delete.')
 
 
 def main():
@@ -455,7 +507,7 @@ def main():
     ap.add_argument('root', nargs='?', default='.', metavar='PATH',
                     help='directory to process (default: current directory)')
     ap.add_argument('--apply', action='store_true', help='perform the renames (default is a dry run)')
-    ap.add_argument('--undo', action='store_true', help='revert renames recorded in PATH/rename_undo.log')
+    ap.add_argument('--undo', action='store_true', help='revert renames under PATH recorded in rename_undo.log')
     ap.add_argument('--keep-id', action='store_true', help='keep the ID after the title, e.g. "Bloodborne [CUSA00900]"')
     ap.add_argument('--build-db', action='store_true', help='add games to the db from param.sfo inside *.pkg files')
     ap.add_argument('--rebuild', action='store_true', help='with --build-db: start a fresh db (drops old entries)')
@@ -465,7 +517,9 @@ def main():
     ap.add_argument('--db', metavar='FILE', help='db file (default: PATH/ps4_titles.db, '
                     'or ps4_titles.db next to the script if PATH has none)')
     ap.add_argument('--log', metavar='FILE',
-                    help='results log path (default: PATH/rename_results_<action>_<timestamp>.log)')
+                    help='results log path (default: rename_results_<action>_<timestamp>.log in the script folder)')
+    ap.add_argument('--clean-logs', action='store_true',
+                    help='delete rename_results_*.log files (rename_undo.log is kept) and exit')
     a = ap.parse_args()
     a.root = os.path.abspath(a.root)
     if not os.path.isdir(a.root):
@@ -476,16 +530,26 @@ def main():
         if not os.path.exists(a.db) and os.path.exists(shared):
             a.db = shared
     print(f'Directory: {a.root}\nDB: {a.db}\n')
-    undo_log = os.path.join(a.root, 'rename_undo.log')
+    undo_log = UNDO_LOG
+    if a.clean_logs:
+        clean_logs(a.root)
+        return
     if a.build_db:
         build_db(a.root, a.db, a.rebuild, a.offline)
         return
+    migrate_undo_log(a.root)
     action = 'undo' if a.undo else 'apply' if a.apply else 'dryrun'
-    log = ResultLog(a.log or os.path.join(a.root, f'rename_results_{action}_{datetime.now():%Y%m%d_%H%M%S}.log'),
-                    action)
+    log_path = a.log
+    if not log_path:
+        base = os.path.join(HERE, f'rename_results_{action}_{datetime.now():%Y%m%d_%H%M%S}')
+        log_path, n = base + '.log', 1
+        while os.path.exists(log_path):  # several runs in the same second
+            n += 1
+            log_path = f'{base}_{n}.log'
+    log = ResultLog(log_path, action)
     try:
         if a.undo:
-            undo(undo_log, log)
+            undo(a.root, undo_log, log)
         else:
             db = load_db(a.db) if os.path.exists(a.db) else {}
             new = missing_ids(a.root, db)
