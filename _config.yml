@@ -1,5 +1,6 @@
 # GitHub Pages site (https://bsgonzalezq.github.io/ps4-pkg-title-renamer/): the README is the page.
 title: PS4 PKG Title Renamer
+tagline: Rename PS4 PKG files to game names   # search result title: "<title> | <tagline>"
 description: >-
   Rename PS4 .pkg files (base game, patch, DLC) and CUSA title-ID folders to game names
   using param.sfo. Optional title ID, version, region and content ID tags, undo,
@@ -8,7 +9,11 @@ url: https://bsgonzalezq.github.io
 baseurl: /ps4-pkg-title-renamer
 lang: en
 theme: jekyll-theme-cayman
-image: /assets/social-preview.png
+defaults:
+  - scope:
+      path: ""
+    values:
+      image: /assets/social-preview.png   # share / Open Graph image
 author: bsgonzalezq
 github:
   is_project_page: true
