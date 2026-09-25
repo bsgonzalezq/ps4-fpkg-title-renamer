@@ -46,6 +46,7 @@ CUSA11253_base.pkg  (loose in root)          Dead Cells [CUSA11253]/
   - [English names for non-English titles](#english-names-for-non-english-titles)
 - [Naming scheme](#naming-scheme)
   - [Name style options](#name-style-options)
+  - [File part order](#file-part-order)
   - [Loose PKGs in the top folder](#loose-pkgs-in-the-top-folder)
 - [Running again](#running-again)
 - [Undo](#undo)
@@ -199,6 +200,7 @@ Re-run the link command if you move the script.
 | `--add-version` | Add the PKG version to `.pkg` names: `Bloodborne [v1.09] [patch].pkg` |
 | `--add-content-id` | Add the content ID to `.pkg` names: `Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [base].pkg` |
 | `--no-type` | Leave out the `[base]` / `[patch]` / `[dlc]` tag: `Bloodborne [v1.09].pkg` |
+| `--order PARTS` | Order of the parts in `.pkg` file names, e.g. `--order id,title` gives `[CUSA00900] Bloodborne [patch].pkg`. See [File part order](#file-part-order) |
 | `--add-region` | Add the region tag after the title/ID: `Bloodborne [CUSA00900] [USA] [patch].pkg` |
 | `--sep SEP` | Use `SEP` instead of spaces in generated names: `--sep _` gives `Grand_Theft_Auto_V_[patch].pkg`. `""` means no separator |
 | `--no-brackets` | Write tags without `[ ]`: `Bloodborne CUSA00900 v1.09 patch.pkg` |
@@ -257,8 +259,9 @@ Every run reads each PKG's `param.sfo` anyway, so the db isn't a speed-up. It's 
   - **TitleID:** the game the PKG belongs to.
   - **Title:** the title as written in that PKG. For DLC it's the DLC's name. For base games and patches it's the game title as the PKG spells it.
 - **What's used for naming:**
-  - **DLC:** the DLC's Title is used in `[dlc]` names, so you can edit it to rename a DLC, e.g. to fix a Japanese-only DLC name. It's placed right after the game title, before any tags, and a repeated game title at its start is dropped: `Bloodborne The Old Hunters [CUSA00900] [dlc].pkg`.
-  - **Base games and patches:** their Title is normally only a record. The script uses it to recognise the original game title at the start of a DLC's name, even after you've edited the game's title in GAMES. If you edit it, whatever you add goes into that PKG's name, like a DLC title. See [Using the db](#using-the-db).
+  - **Every PKG type can be renamed through its Title,** whether base game, patch or DLC. The Title's text, without the game title at its start, becomes the name's **label**. The label comes right after the game title by default, or wherever `--order` puts it: `Bloodborne The Old Hunters [CUSA00900] [dlc].pkg`, `Bloodborne Complete Edition [CUSA00900] [base].pkg`.
+  - **DLC:** the Title is always used, since it's the DLC's name.
+  - **Base games and patches:** the Title is used only once you've edited it, i.e. it differs from the title inside the PKG. Until then it's a record, which the script also uses to recognise the original game title at the start of DLC names. See [Using the db](#using-the-db).
 - **What's only a record:** type and version are always read from the PKG itself. The PKGS section is a record of your collection, and a newer patch simply adds a new line.
 
 ### Using the db
@@ -273,25 +276,30 @@ CUSA00900|Bloodborne™|USA             ->   CUSA00900|Bloodborne GOTY|USA
 
 The game's folder and all its PKGs follow, in whatever style you use: `Bloodborne GOTY [CUSA00900]/Bloodborne GOTY [CUSA00900] [patch].pkg`. DLC names follow too, keeping their DLC part: `Bloodborne GOTY The Old Hunters [CUSA00900] [dlc].pkg`. Use this to fix a lookup that missed an edition suffix, e.g. `DoDonPachi DaiOuJou` becomes `DoDonPachi DaiOuJou Re-incarnation`, or to shorten long titles.
 
-**Rename a DLC.** Edit the last field of its PKGS line:
+**Rename any PKG** (base game, patch or DLC). Edit the last field, Title, of its PKGS line:
 
 ```
-UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunters
-                                                ->   ...|dlc|CUSA00900|The Old Hunters Expansion
-```
-
-This is the way to give a Japanese-only DLC an English name, since DLC titles are never looked up online. If a PKG isn't in the db yet, run a dry run first. It adds every new PKG to the db, so you can edit the line and then `--apply`.
-
-**Label a patch or base game PKG,** e.g. a mod or a special build. Edit the Title field of its PKGS line and add your label:
-
-```
+UP9000-CUSA00900_00-BLOODBORNE000000|01.04|base|CUSA00900|Bloodborne™
+                               ->   ...|base|CUSA00900|Bloodborne™ Complete Edition
 UP1004-CUSA23501_00-GTATHREE00000001|01.08|patch|CUSA23501|Grand Theft Auto III – The Definitive Edition
-                     ->   ...|patch|CUSA23501|Grand Theft Auto III – The Definitive Edition Soundtrack Restoration Mod
+                               ->   ...|patch|CUSA23501|Grand Theft Auto III – The Definitive Edition Soundtrack Restoration Mod
+UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunters
+                               ->   ...|dlc|CUSA00900|The Old Hunters Expansion
 ```
 
-On the next `--apply`, what you added goes right after the game title: `Grand Theft Auto III – The Definitive Edition Soundtrack Restoration Mod [CUSA23501] [v1.08] [patch].pkg`. You can also replace the whole Title, e.g. `Soundtrack Restoration Mod`. The game title is still added in front. To go back to the plain name, restore the original Title, i.e. what the PKG says.
+On the next `--apply`:
 
-- **Only edited titles count:** a base or patch Title is used only when it differs from the title inside the PKG.
+```
+Bloodborne Complete Edition [CUSA00900] [v1.04] [base].pkg
+Grand Theft Auto III – The Definitive Edition Soundtrack Restoration Mod [CUSA23501] [v1.08] [patch].pkg
+Bloodborne The Old Hunters Expansion [CUSA00900] [v1.00] [dlc].pkg
+```
+
+- **How the Title is used:** the game title at the start of a Title isn't repeated. What's left is the PKG's **label**, placed right after the game title, or wherever `--order` puts `label`. You can write the Title with or without the game title: `Complete Edition` and `Bloodborne™ Complete Edition` give the same name.
+- **Removing a label:** restore the original Title, i.e. what the PKG says.
+- **DLC:** always use their Title. This is the way to give a Japanese-only DLC an English name, since DLC titles are never looked up online.
+- **Base games and patches:** use their Title only once it differs from the title inside the PKG.
+- **New PKGs:** if a PKG isn't in the db yet, run a dry run first. It adds every new PKG to the db, so you can edit the line and then `--apply`.
 - **One line per content ID, type and version:** a line applies to every PKG with the same content ID, type and version. A mod patch built from an official patch usually has exactly the same `param.sfo` values as that patch. If both are on the drive, they share one line, so the label applies to both, and they'd get the same name. The second one is then reported as an error and left alone.
 
 **Change or fix a region tag** (`--add-region`). Edit the Region field of the game. The recognised values are `USA`, `EUR`, `JPN`, `ASIA`, `KOR` and `HB`. Any other value is kept in the db but isn't added as a tag.
@@ -348,7 +356,7 @@ CUSA32997: 怒首領蜂大往生 臨廻転生   ->  DoDonPachi DaiOuJou
 
 ## Naming scheme
 
-Every PS4 PKG is named from its own `param.sfo`, whatever it's currently called. The PKG type is a tag like the others, `[base]`, `[patch]` or `[dlc]`, and it's always the last tag:
+Every PS4 PKG is named from its own `param.sfo`, whatever it's currently called. The PKG type is a tag like the others, `[base]`, `[patch]` or `[dlc]`. In the default order, shown here, it's the last tag:
 
 ```
 <title>[ <ID>][ <region>][ <version>][ <content ID>] [base].pkg
@@ -359,7 +367,8 @@ Every PS4 PKG is named from its own `param.sfo`, whatever it's currently called.
 - **`<title>`:** the game title. It's always there, except in `.pkg` file names with `--no-title`, where it's left out and the name starts with the DLC title or the first tag.
 - **DLC title:** comes right after the game title, before every tag, so the full name of a DLC reads as one piece, e.g. `Bloodborne The Old Hunters`.
 - **Tags:** `[ID]` with `--add-id`, `[region]` with `--add-region`, plus version and content ID. Each is joined with `--sep` and written in brackets unless you use `--no-brackets`.
-- **Type tag:** always last. `--no-type` leaves it out.
+- **Type tag:** last by default. `--no-type` leaves it out.
+- **Order:** `--order` rearranges all of these parts in file names. See [File part order](#file-part-order).
 - **Folders:** named `<title>[ <ID>][ <region>]`, e.g. `Bloodborne [CUSA00900] [USA]/`.
 
 | `CATEGORY` in param.sfo | Type | Default | `--add-id` | `--no-title --add-id` |
@@ -438,6 +447,35 @@ Bloodborne/
   - Text the script doesn't generate keeps its spaces, e.g. `backup` in `Bloodborne backup/`.
 - **`--no-brackets`:** tags are then separated only by `SEP`. The script still recognises its own names when you switch styles later.
 - **Switching styles:** each style is applied in full on every run. See [Running again](#running-again).
+
+### File part order
+
+`--order` sets the order of the parts in `.pkg` file names. Folders always keep `title [ID] [region]`. The parts are:
+
+| Part | What it is | Shown when |
+|---|---|---|
+| `title` | the game title | always, except with `--no-title` |
+| `label` | the DLC name, or a label from the db (see [Using the db](#using-the-db)) | DLC, and PKGs you've labelled |
+| `id` | `[CUSA00900]` | `--add-id` |
+| `region` | `[USA]` | `--add-region` |
+| `version` | `[v1.09]` | `--add-version` |
+| `cid` | `[UP9000-CUSA00900_00-BLOODBORNE000000]`. `content-id` also works as the name | `--add-content-id` |
+| `type` | `[base]` / `[patch]` / `[dlc]` | unless `--no-type` |
+
+The default order is `title,label,id,region,version,cid,type`. List the parts you want first. The rest follow in the default order:
+
+```
+--add-id --add-version                              Bloodborne [CUSA00900] [v1.09] [patch].pkg
+--add-id --add-version --order id,title             [CUSA00900] Bloodborne [v1.09] [patch].pkg
+--add-id --add-version --order type,version         [patch] [v1.09] Bloodborne [CUSA00900].pkg
+--no-title --add-id --add-version --order id        [CUSA00900] [v1.09] [patch].pkg
+--add-id --add-region --no-brackets --sep _ --order region,id
+                                                    USA_CUSA00900_Bloodborne_The_Old_Hunters_dlc.pkg
+```
+
+- **Positions only:** `--order` only changes where parts go. Whether a tag appears still depends on its option.
+- **Checked:** an unknown or repeated part name stops the script with an error.
+- **Changing order later:** file names are rebuilt from `param.sfo` on every run, so you can change the order at any time. Undo keeps working.
 
 ### Loose PKGs in the top folder
 

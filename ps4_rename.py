@@ -15,8 +15,8 @@ Usage:
   ps4_rename.py [PATH] --clean-logs    delete rename_results_*.log (keeps rename_undo.log)
 
 Name style (for a rename run; a later run with other options re-styles everything).
-The game title is always used, other parts are added as tags; the type tag is always last:
-  <title>[ <DLC title>][ <ID>][ <region>][ <version>][ <content ID>][ <type>].pkg
+The game title is always used, other parts are added as tags; the type tag is last by default:
+  <title>[ <label>][ <ID>][ <region>][ <version>][ <content ID>][ <type>].pkg   (default order)
   --add-id           title ID tag             Bloodborne [CUSA00900] [patch].pkg
   --add-region       region tag               Bloodborne [USA] [patch].pkg
   --add-version      version tag              Bloodborne [v1.09] [patch].pkg   (patch: APP_VER, base/DLC: VERSION)
@@ -25,6 +25,9 @@ The game title is always used, other parts are added as tags; the type tag is al
   --no-title         no game title in .pkg    [CUSA00900] [v1.09] [patch].pkg   (needs --add-id or --add-content-id)
   --sep SEP          SEP instead of spaces    --sep _ : Bloodborne_[CUSA00900]_[v1.09]_[patch].pkg
   --no-brackets      tags without [ ]         Bloodborne CUSA00900 v1.09 patch.pkg
+  --order PARTS      order in .pkg names      --order id,title : [CUSA00900] Bloodborne [v1.09] [patch].pkg
+                     parts: title,label,id,region,version,cid,type (listed first, rest keep default order)
+  label = the DLC name, or a Title you edited in the db's PKGS section (works for base, patch and DLC)
   Folders: <title>[ <ID>][ <region>], always with the title; version, content ID and type
   go on .pkg files only. DLC keep their DLC title: The Old Hunters [CUSA00900] [dlc].pkg
 
@@ -448,6 +451,26 @@ def safe_title(db, gid):
     return re.sub(r'\s+', ' ', db[gid][0].translate(BAD)).strip()
 
 
+FILE_PARTS = ('title', 'label', 'id', 'region', 'version', 'cid', 'type')   # default order in .pkg names
+PART_ALIASES = {'content-id': 'cid', 'contentid': 'cid', 'dlc': 'label', 'name': 'label', 'ver': 'version'}
+
+
+def parse_order(text):
+    """--order value -> full part order. Listed parts come first in the given order, the rest follow
+    in the default order. Raises ValueError for unknown or repeated parts."""
+    listed = []
+    for raw in (t.strip().lower() for t in text.split(',')):
+        if not raw:
+            continue
+        part = PART_ALIASES.get(raw, raw)
+        if part not in FILE_PARTS:
+            raise ValueError(f'unknown part "{raw}" (use: {", ".join(FILE_PARTS)})')
+        if part in listed:
+            raise ValueError(f'"{raw}" is listed twice')
+        listed.append(part)
+    return tuple(listed) + tuple(p for p in FILE_PARTS if p not in listed)
+
+
 class Style:
     """How generated names look: which parts they have and how the parts are joined.
 
@@ -459,13 +482,14 @@ class Style:
     brackets     put tags in [ ]
     no_type      leave out the type tag                   [base] / [patch] / [dlc]
     add_region   region tag after the title/ID            [USA]
+    order        order of the parts in .pkg names (folders always: title, ID, region)
     """
 
     def __init__(self, add_id=False, add_version=False, add_cid=False, no_title=False,
-                 sep=' ', brackets=True, no_type=False, add_region=False):
+                 sep=' ', brackets=True, no_type=False, add_region=False, order=FILE_PARTS):
         self.add_id, self.add_version, self.add_cid = add_id, add_version, add_cid
         self.no_title, self.sep, self.brackets, self.no_type = no_title, sep, brackets, no_type
-        self.add_region = add_region
+        self.add_region, self.order = add_region, tuple(order)
 
     def tag(self, text):
         return f'[{text}]' if self.brackets else text
@@ -476,17 +500,33 @@ class Style:
     def join(self, *parts):
         return self.sep.join(p for p in parts if p)
 
-    def game(self, db, gid, extra='', file=False):
-        """The game part of a name: "Bloodborne", "Bloodborne [CUSA00900]", optionally followed by
-        a region tag ("[USA]"). `extra` (a DLC title / patch label) goes right after the title,
-        before any tag: "Bloodborne The Old Hunters [CUSA00900]". For .pkg files with --no-title
-        the title is left out: "The Old Hunters [CUSA00900]" (folders always keep it)."""
+    def region(self, db, gid):
+        r = db[gid][1] if gid in db and self.add_region and db[gid][1] in REGION_TAGS else ''
+        return self.tag(r) if r else ''
+
+    def file_name(self, db, gid, kind, label='', ver='', cid=''):
+        """A .pkg name (without extension) from its parts, in self.order (--order). Default:
+        <title> <label> [ID] [region] [version] [content ID] [type], e.g.
+        "Bloodborne The Old Hunters [CUSA00900] [USA] [v1.00] [dlc]"."""
+        known = gid in db
+        parts = {
+            'title': '' if self.no_title else (self.spaced(safe_title(db, gid)) if known else gid),
+            'label': self.spaced(label) if label else '',
+            # an unknown game already shows its ID as the title
+            'id': self.tag(gid) if self.add_id and (known or self.no_title) else '',
+            'region': self.region(db, gid),
+            'version': self.tag(version_tag(ver)) if self.add_version and version_tag(ver) else '',
+            'cid': self.tag(cid) if self.add_cid and cid else '',
+            'type': '' if self.no_type else self.tag(kind),
+        }
+        return self.join(*(parts[p] for p in self.order))
+
+    def game(self, db, gid, extra=''):
+        """The game part of a folder name: "Bloodborne", "Bloodborne [CUSA00900]", optionally
+        followed by a region tag ("[USA]"). Folders always have the title and this fixed order."""
         extra = self.spaced(extra) if extra else ''
         known = gid in db
-        region = db[gid][1] if known and self.add_region and db[gid][1] in REGION_TAGS else ''
-        region = self.tag(region) if region else ''
-        if file and self.no_title:
-            return self.join(extra, self.tag(gid) if self.add_id else '', region)
+        region = self.region(db, gid)
         if not known:
             return self.join(gid, extra)
         title = self.spaced(safe_title(db, gid))
@@ -589,7 +629,7 @@ def version_tag(ver):
 
 
 def pkg_name(info, db, style, unknown):
-    """File name from a pkg's param.sfo, type tag always last:
+    """File name from a pkg's param.sfo, in the default order (see --order):
     <title>[ <ID>][ <region>][ <version>][ <content ID>] [base].pkg / [patch].pkg
     <title> <DLC title>[ <ID>][ <region>][ <version>][ <content ID>] [dlc].pkg
     <title> is the game title; --no-title leaves it out (only the DLC title / label and tags
@@ -612,24 +652,16 @@ def pkg_name(info, db, style, unknown):
         titles = [safe_title(db, gid), ptitle] if gid in db else [ptitle]
     d = re.sub(r'\s+', ' ', text.translate(BAD)).strip()
     if d and gid in db:
-        # drop the game title from the start (the name starts with it, or --no-title removes it);
-        # try the db title
-        # and the title as the game's own pkgs spell it (the db one may be edited)
+        # drop the game title from the start (the title part has it, or --no-title removes it);
+        # try the db title and the title as the game's own pkgs spell it (the db one may be edited)
         for t in sorted((t for t in titles if t), key=lambda t: -len(_alnum(t))):
             cut = strip_prefix(d, t.translate(BAD))
             if cut != d:
                 cut = cut.strip(' -–_.')
                 d = cut or (d if kind == 'dlc' else '')
                 break
-    head = style.game(db, gid, d, file=True)   # DLC / edited title right after the game title, before the tags
-    tags = []
-    if style.add_version and version_tag(ver):
-        tags.append(style.tag(version_tag(ver)))
-    if style.add_cid and cid:
-        tags.append(style.tag(cid))
-    if not style.no_type:
-        tags.append(style.tag(kind))
-    return windows_safe(style.join(head, *tags)) + '.pkg'
+    # parts in --order; default: title, label (DLC title / db label), ID, region, version, content ID, type
+    return windows_safe(style.file_name(db, gid, kind, d, ver, cid)) + '.pkg'
 
 
 def folder_gid(path):
@@ -1110,6 +1142,10 @@ def main():
                     help='add the region tag after the title/ID, e.g. "Bloodborne [CUSA00900] [USA]"')
     ap.add_argument('--no-type', action='store_true',
                     help='leave out the [base] / [patch] / [dlc] tag, e.g. "Bloodborne [v1.09].pkg"')
+    ap.add_argument('--order', metavar='PARTS',
+                    help='order of the parts in .pkg file names (folders keep theirs), comma-separated from: '
+                         'title, label, id, region, version, cid, type. Parts not listed follow in the '
+                         'default order (title,label,id,region,version,cid,type), e.g. --order id,title')
     ap.add_argument('--build-db', action='store_true', help='add games to the db from param.sfo inside *.pkg files')
     ap.add_argument('--rebuild', action='store_true', help='with --build-db: start a fresh db (drops old entries)')
     ap.add_argument('--offline', action='store_true', help="don't look up English names online when building the db")
@@ -1130,8 +1166,12 @@ def main():
     if a.no_title and not (a.add_id or a.add_content_id):
         ap.error('--no-title needs --add-id or --add-content-id, so every file keeps an ID '
                  'that says which game it belongs to')
+    try:
+        order = parse_order(a.order) if a.order else FILE_PARTS
+    except ValueError as e:
+        ap.error(f'--order: {e}')
     style = Style(a.add_id, a.add_version, a.add_content_id, a.no_title, a.sep, not a.no_brackets, a.no_type,
-                  a.add_region)
+                  a.add_region, order)
     a.root = os.path.abspath(a.root)
     if not os.path.isdir(a.root):
         ap.error(f'not a directory: {a.root}')
