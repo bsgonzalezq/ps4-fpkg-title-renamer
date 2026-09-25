@@ -15,7 +15,8 @@ IDs missing from the db are added automatically (as --build-db) before renaming.
 
 Logs are kept in the script's folder: every rename/undo run writes
 rename_results_<action>_<timestamp>.log (CHANGED, NOT CHANGED + reason, ERRORS),
-and --apply records renames in rename_undo.log for --undo.
+and --apply records renames in rename_undo.log for --undo. Only the 5 newest results
+logs are kept; older ones are deleted automatically (rename_undo.log is never deleted).
   ps4_rename.py [PATH] --clean-logs delete rename_results_*.log (keeps rename_undo.log)
 
 The script keeps itself, its db (ps4_titles.db) and its logs in a folder named
@@ -31,6 +32,7 @@ HERE = os.path.dirname(os.path.realpath(__file__))   # real script folder, even 
 UNDO_LOG = os.path.join(HERE, 'rename_undo.log')
 DB_FILE = os.path.join(HERE, 'ps4_titles.db')
 TOOL_DIR = 'ps4-title-renamer'   # folder the script (with its db and logs) always lives in
+MAX_LOGS = 5                     # results logs kept in the script folder; older ones are rotated out
 ID_RE = re.compile(r'(?<![A-Z])([A-Z]{4}\d{5})(?!\d)')
 SKIP = {'System Volume Information', '$RECYCLE.BIN', '.Trash-1000', '.git', 'ps4-title-renamer'}
 REGIONS = {'UP': 'USA', 'EP': 'EUR', 'JP': 'JPN', 'HP': 'ASIA', 'KP': 'KOR'}
@@ -491,6 +493,19 @@ def undo(root, undo_log, log):
         os.remove(undo_log)
 
 
+def rotate_logs():
+    """Keep only the MAX_LOGS newest rename_results_*.log in the script folder (never rename_undo.log)."""
+    logs = [os.path.join(HERE, fn) for fn in os.listdir(HERE)
+            if fn.startswith('rename_results_') and fn.endswith('.log')]
+    logs.sort(key=lambda p: (os.path.getmtime(p), p), reverse=True)
+    for p in logs[MAX_LOGS:]:
+        try:
+            os.remove(p)
+            print(f'Rotated out old log {os.path.basename(p)}')
+        except OSError as e:
+            print(f'could not delete old log {p}: {e.strerror}', file=sys.stderr)
+
+
 def clean_logs(root):
     """Delete results logs (script folder, plus old ones left in PATH); never rename_undo.log."""
     found = set()
@@ -626,6 +641,7 @@ def main():
             rename_all(a.root, db, a.keep_id, a.apply, undo_log, log)
     finally:
         log.write()
+        rotate_logs()
 
 
 if __name__ == '__main__':

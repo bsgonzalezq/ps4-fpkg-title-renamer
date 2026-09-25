@@ -216,7 +216,7 @@ Running the script again on renamed items doesn't rename them twice:
 
 ## Logs
 
-All logs are kept in the script's folder, not in `PATH`. In a git clone, `.gitignore` excludes them. Every rename or undo run writes `rename_results_<dryrun|apply|undo>_<timestamp>.log`:
+All logs are kept in the script's folder, not in `PATH`. In a git clone, `.gitignore` excludes them. Every rename or undo run writes `rename_results_<dryrun|apply|undo>_<timestamp>.log`. Only the 5 newest are kept, and older ones are deleted automatically after each run. To change the limit, edit `MAX_LOGS` at the top of the script. `rename_undo.log` is never rotated.
 
 ```
 === CHANGED (143) ===
