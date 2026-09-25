@@ -15,8 +15,11 @@ IDs missing from the db are added automatically (as --build-db) before renaming.
 
 Logs are kept in the script's folder: every rename/undo run writes
 rename_results_<action>_<timestamp>.log (CHANGED, NOT CHANGED + reason, ERRORS),
-and --apply records renames in rename_undo.log for --undo. Only the 5 newest results
-logs are kept; older ones are deleted automatically (rename_undo.log is never deleted).
+and --apply records renames in rename_undo.log for --undo. Only the newest results
+logs are kept (5, or --keep-logs N); older ones are deleted automatically
+(rename_undo.log is never deleted).
+
+Works on Linux, macOS and Windows 10/11 (use `python` or `py` instead of `python3`).
   ps4_rename.py [PATH] --clean-logs delete rename_results_*.log (keeps rename_undo.log)
 
 The script keeps itself, its db (ps4_titles.db) and its logs in a folder named
@@ -24,21 +27,71 @@ ps4-title-renamer; run from anywhere else, it creates ./ps4-title-renamer and mo
 
 DB format (plain text, one per line, '#' comments):  ID|Title|Region
 """
-import argparse, json, os, re, shutil, struct, subprocess, sys, time, unicodedata
+import argparse, json, os, platform, re, shutil, struct, subprocess, sys, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime
+
+if sys.version_info < (3, 8):
+    sys.exit(f'Python 3.8 or newer is required (found {platform.python_version()})')
+
+IS_WINDOWS = os.name == 'nt'
+OS_NAME = f'{platform.system()} {platform.release()}'.strip()
+
+# Titles contain characters like ™, Ψ or Japanese text: never crash printing them, e.g. on a
+# Windows console with a legacy code page or when output is redirected to a file.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if IS_WINDOWS and not _stream.isatty():
+            _stream.reconfigure(encoding='utf-8', errors='replace')
+        else:
+            _stream.reconfigure(errors='replace')
+    except (AttributeError, ValueError):
+        pass
 
 HERE = os.path.dirname(os.path.realpath(__file__))   # real script folder, even when run via a symlink
 UNDO_LOG = os.path.join(HERE, 'rename_undo.log')
 DB_FILE = os.path.join(HERE, 'ps4_titles.db')
 TOOL_DIR = 'ps4-title-renamer'   # folder the script (with its db and logs) always lives in
-MAX_LOGS = 5                     # results logs kept in the script folder; older ones are rotated out
+MAX_LOGS = 5                     # default number of results logs kept (--keep-logs)
 ID_RE = re.compile(r'(?<![A-Z])([A-Z]{4}\d{5})(?!\d)')
 SKIP = {'System Volume Information', '$RECYCLE.BIN', '.Trash-1000', '.git', 'ps4-title-renamer'}
 REGIONS = {'UP': 'USA', 'EP': 'EUR', 'JP': 'JPN', 'HP': 'ASIA', 'KP': 'KOR'}
 # chars not allowed on exFAT/NTFS
 BAD = str.maketrans({':': ' - ', '/': '-', '\\': '-', '*': '', '?': '', '"': "'",
                      '<': '', '>': '', '|': '-', '・': '-', '™': '', '®': '', '©': ''})
+BAD.update({i: ' ' if i in (9, 10, 13) else None for i in range(32)})   # control chars (tab is the undo-log separator)
+RESERVED = {'CON', 'PRN', 'AUX', 'NUL', *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}
+
+
+def lp(path):
+    """Long-path-safe form of path for file operations on Windows (> 260 chars); unchanged elsewhere."""
+    if not IS_WINDOWS:
+        return path
+    p = os.path.abspath(path)
+    if len(p) < 240 or p.startswith('\\\\?\\'):
+        return path
+    return '\\\\?\\UNC\\' + p[2:] if p.startswith('\\\\') else '\\\\?\\' + p
+
+
+def same_path(a, b):
+    """Compare paths the way the OS does (case-insensitive on Windows)."""
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def same_file(a, b):
+    """True when a and b are the same file, e.g. names differing only in case on NTFS/exFAT."""
+    try:
+        return os.path.samefile(lp(a), lp(b))
+    except OSError:
+        return False
+
+
+def windows_safe(name):
+    """Avoid names Windows can't use: reserved device names and trailing dots/spaces."""
+    name = name.rstrip(' .')
+    if name.split('.')[0].strip().upper() in RESERVED:
+        name = '_' + name
+    return name
 
 
 def load_db(path):
@@ -55,7 +108,7 @@ def load_db(path):
 
 def read_sfo(pkg):
     """Return (content_id, {key: value}) from a PS4 PKG's param.sfo, or None."""
-    with open(pkg, 'rb') as f:
+    with open(lp(pkg), 'rb') as f:
         h = f.read(0x100)
         if h[:4] != b'\x7fCNT':
             return None
@@ -279,7 +332,7 @@ def new_name(name, db, keep_id, unknown):
             return gid
         t = safe_title(db, gid)
         return f'{t} [{gid}]' if keep_id else t
-    return BARE_ID_RE.sub(sub, TAG_RE.sub(tag, name)).rstrip(' .')
+    return windows_safe(BARE_ID_RE.sub(sub, TAG_RE.sub(tag, name)))
 
 
 PKG_KINDS = {'gd': 'base', 'gde': 'base', 'gp': 'patch', 'ac': 'dlc'}   # param.sfo CATEGORY
@@ -402,16 +455,16 @@ def rename_all(root, db, keep_id, apply, undo_log, log):
                 continue
             src, dst = os.path.join(dp, name), os.path.join(dp, subdir, nn)
             target = os.path.join(subdir, nn) if subdir else nn
-            if os.path.exists(dst):
+            if os.path.exists(lp(dst)) and not same_file(src, dst):  # same file = case-only rename
                 log.error(relpath, f'target already exists: {target}')
                 continue
             print(f'{relpath}  ->  {target}' + (f'   (new folder "{subdir}")' if create else ''))
             if apply:
                 try:
                     if create:
-                        os.mkdir(os.path.join(root, subdir))
+                        os.mkdir(lp(os.path.join(root, subdir)))
                         done.append(('MKDIR', os.path.join(root, subdir)))
-                    os.rename(src, dst)
+                    os.rename(lp(src), lp(dst))
                 except OSError as e:
                     log.error(relpath, f'rename to "{target}" failed: {e.strerror}')
                     continue
@@ -430,13 +483,14 @@ def rename_all(root, db, keep_id, apply, undo_log, log):
 
 
 def _under(path, root):
-    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+    path, root = os.path.normcase(path), os.path.normcase(root)
+    return path == root or path.startswith(os.path.join(root, ''))  # join adds the OS separator
 
 
 def migrate_undo_log(root):
     """Move a rename_undo.log left in PATH by older versions into the script folder."""
     old = os.path.join(root, 'rename_undo.log')
-    if os.path.abspath(old) == UNDO_LOG or not os.path.isfile(old):
+    if same_path(old, UNDO_LOG) or not os.path.isfile(old):
         return
     with open(old, encoding='utf-8') as f:
         data = f.read()
@@ -461,20 +515,20 @@ def undo(root, undo_log, log):
     for src, dst in reversed(mine):
         if src == 'MKDIR':  # folder created for a loose pkg: remove it once empty again
             try:
-                os.rmdir(dst)
+                os.rmdir(lp(dst))
                 print(f'removed folder {dst}')
                 log.change(dst, '(folder removed)')
             except OSError as e:
                 log.keep(dst, f'created folder not removed: {e.strerror}')
             continue
-        if not os.path.exists(dst):
+        if not os.path.exists(lp(dst)):
             log.error(dst, 'renamed item no longer exists')
             failed.append((src, dst))
-        elif os.path.exists(src):
+        elif os.path.exists(lp(src)) and not same_file(src, dst):
             log.keep(dst, f'original name already in use: {src}')
         else:
             try:
-                os.rename(dst, src)
+                os.rename(lp(dst), lp(src))
             except OSError as e:
                 log.error(dst, f'restore failed: {e.strerror}')
                 failed.append((src, dst))
@@ -493,12 +547,15 @@ def undo(root, undo_log, log):
         os.remove(undo_log)
 
 
-def rotate_logs():
-    """Keep only the MAX_LOGS newest rename_results_*.log in the script folder (never rename_undo.log)."""
+def rotate_logs(keep=MAX_LOGS):
+    """Keep only the `keep` newest rename_results_*.log in the script folder (never rename_undo.log).
+    keep=0 keeps them all."""
+    if keep <= 0:
+        return
     logs = [os.path.join(HERE, fn) for fn in os.listdir(HERE)
             if fn.startswith('rename_results_') and fn.endswith('.log')]
     logs.sort(key=lambda p: (os.path.getmtime(p), p), reverse=True)
-    for p in logs[MAX_LOGS:]:
+    for p in logs[keep:]:
         try:
             os.remove(p)
             print(f'Rotated out old log {os.path.basename(p)}')
@@ -536,13 +593,13 @@ def relocate():
     """Keep the script in a folder named ps4-title-renamer: if it isn't in one, create
     ./ps4-title-renamer under the current directory, move the script plus its db and logs
     there, and re-run from the new location. Returns False if it stayed where it is."""
-    if os.path.basename(HERE) == TOOL_DIR:
+    if os.path.normcase(os.path.basename(HERE)) == os.path.normcase(TOOL_DIR):
         return False
     if os.path.isdir(os.path.join(HERE, '.git')):
         print(f'Note: script folder "{HERE}" is a git clone, not moving it into {TOOL_DIR}/\n')
         return False
     cwd = os.getcwd()
-    target = cwd if os.path.basename(cwd) == TOOL_DIR else os.path.join(cwd, TOOL_DIR)
+    target = cwd if os.path.normcase(os.path.basename(cwd)) == os.path.normcase(TOOL_DIR) else os.path.join(cwd, TOOL_DIR)
     script = os.path.join(target, 'ps4_rename.py')
     if os.path.exists(script):
         print(f'Note: {script} already exists, not replacing it; running from {HERE}\n')
@@ -578,7 +635,7 @@ def relocate():
 def migrate_db(root, db_path):
     """Merge a ps4_titles.db left in PATH by older versions into the db next to the script."""
     old = os.path.join(root, 'ps4_titles.db')
-    if os.path.isfile(old) and os.path.abspath(old) != os.path.abspath(db_path):
+    if os.path.isfile(old) and not same_path(old, db_path):
         n = merge_db(old, db_path)
         print(f'Merged {old} into {db_path} ({n} new entries)\n')
 
@@ -598,9 +655,13 @@ def main():
     ap.add_argument('--db', metavar='FILE', help='db file (default: ps4_titles.db next to the script)')
     ap.add_argument('--log', metavar='FILE',
                     help='results log path (default: rename_results_<action>_<timestamp>.log in the script folder)')
+    ap.add_argument('--keep-logs', type=int, default=MAX_LOGS, metavar='N',
+                    help=f'number of results logs to keep, oldest are deleted (default: {MAX_LOGS}, 0 = keep all)')
     ap.add_argument('--clean-logs', action='store_true',
                     help='delete rename_results_*.log files (rename_undo.log is kept) and exit')
     a = ap.parse_args()
+    if a.keep_logs < 0:
+        ap.error('--keep-logs must be 0 or more')
     a.root = os.path.abspath(a.root)
     if not os.path.isdir(a.root):
         ap.error(f'not a directory: {a.root}')
@@ -608,7 +669,8 @@ def main():
     if not a.db:
         a.db = DB_FILE
         migrate_db(a.root, a.db)
-    print(f'Directory: {a.root}\nScript folder: {HERE}\nDB: {a.db}\n')
+    print(f'OS: {OS_NAME} (Python {platform.python_version()})\n'
+          f'Directory: {a.root}\nScript folder: {HERE}\nDB: {a.db}\n')
     undo_log = UNDO_LOG
     if a.clean_logs:
         clean_logs(a.root)
@@ -641,7 +703,7 @@ def main():
             rename_all(a.root, db, a.keep_id, a.apply, undo_log, log)
     finally:
         log.write()
-        rotate_logs()
+        rotate_logs(a.keep_logs)
 
 
 if __name__ == '__main__':

@@ -27,7 +27,7 @@ CUSA11253_base.pkg  (loose in root)          Dead Cells/
 | git | Clones and updates the repo |
 | Internet access | Only needed for the English-name lookup in `--build-db`. Use `--offline` to skip it |
 
-The prerequisites are also listed in [`requirements.txt`](requirements.txt), which names no packages, and checked by [`install_prereqs.sh`](install_prereqs.sh).
+The prerequisites are also listed in [`requirements.txt`](requirements.txt), which names no packages, and checked by [`install_prereqs.sh`](install_prereqs.sh) (Linux/macOS) or [`install_prereqs.ps1`](install_prereqs.ps1) (Windows).
 
 ## Installation
 
@@ -60,15 +60,26 @@ If you'd rather install by hand:
 ### Windows
 
 ```powershell
-winget install -e --id Python.Python.3.12
-winget install -e --id Git.Git
-# reopen the terminal so both are on PATH, then:
+winget install -e --id Git.Git          # skip if git is installed
+# reopen the terminal so git is on PATH, then:
 git clone https://github.com/bsgonzalezq/ps4-title-renamer.git
 cd ps4-title-renamer
-python ps4_rename.py --help
+powershell -ExecutionPolicy Bypass -File .\install_prereqs.ps1   # installs / checks Python 3.8+ and git
+py ps4_rename.py --help
 ```
 
-On Windows, use `python` where this README shows `python3`.
+`install_prereqs.ps1` works like `install_prereqs.sh`: it installs only what's missing (through `winget`), checks the Python version, and checks the script runs.
+
+**Using the script on Windows:**
+
+- **Commands:** use `py` or `python` where this README shows `python3`, and `\` in paths, e.g. `py ps4-title-renamer\ps4_rename.py D:\PS4 --apply`.
+- **Everything else works as on Linux:** a drive root like `D:\` works as `PATH`, and the script checks the OS when it starts. It handles Windows differences automatically:
+  - **Long paths:** paths longer than 260 characters work even if Windows' long-path support is off.
+  - **Case:** Windows ignores letter case in names and paths (`C:\Games` = `c:\games`), and so does the script, including renames that only change letter case.
+  - **Names:** file names that Windows can't use are made safe. That covers `:` and similar characters, the reserved names `CON`, `NUL` and `COM1`, and trailing dots.
+  - **Console:** titles with characters like `™`, `Ψ` or Japanese text never crash the output, even when it's redirected to a file.
+- **Same drive on both systems:** a drive renamed on Linux can be used on Windows and the other way round. Names are already safe for exFAT/NTFS, and the db and logs are plain UTF-8 text.
+- **`rename_undo.log`:** records full paths, so run `--undo` on the same OS and drive letter or mount point you used for `--apply`.
 
 ### Updating
 
@@ -147,6 +158,7 @@ Re-run the link command if you move the script.
 | `--no-auto-db` | Don't build the db automatically when IDs are missing |
 | `--db FILE` | Title db to use (see below) |
 | `--log FILE` | Where to write the results log (default: the script's folder) |
+| `--keep-logs N` | Number of results logs to keep; older ones are deleted. Default 5, and `0` keeps all |
 | `--clean-logs` | Delete the results logs; `rename_undo.log` is kept |
 | `-h`, `--help` | Show help |
 
@@ -216,7 +228,7 @@ Running the script again on renamed items doesn't rename them twice:
 
 ## Logs
 
-All logs are kept in the script's folder, not in `PATH`. In a git clone, `.gitignore` excludes them. Every rename or undo run writes `rename_results_<dryrun|apply|undo>_<timestamp>.log`. Only the 5 newest are kept, and older ones are deleted automatically after each run. To change the limit, edit `MAX_LOGS` at the top of the script. `rename_undo.log` is never rotated.
+All logs are kept in the script's folder, not in `PATH`. In a git clone, `.gitignore` excludes them. Every rename or undo run writes `rename_results_<dryrun|apply|undo>_<timestamp>.log`. Only the 5 newest are kept, and older ones are deleted automatically after each run. Use `--keep-logs N` to change the limit, or `--keep-logs 0` to keep every log. `rename_undo.log` is never rotated.
 
 ```
 === CHANGED (143) ===

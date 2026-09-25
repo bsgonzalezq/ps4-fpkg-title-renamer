@@ -1,0 +1,4 @@
+# Keep LF everywhere so a clone made on Windows still runs on Linux (shebangs, bash);
+# Python on Windows reads LF files fine. PowerShell scripts get CRLF.
+* text=auto eol=lf
+*.ps1 text eol=crlf
