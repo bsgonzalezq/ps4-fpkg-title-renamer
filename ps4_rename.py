@@ -18,16 +18,21 @@ rename_results_<action>_<timestamp>.log (CHANGED, NOT CHANGED + reason, ERRORS),
 and --apply records renames in rename_undo.log for --undo.
   ps4_rename.py [PATH] --clean-logs delete rename_results_*.log (keeps rename_undo.log)
 
+The script keeps itself, its db (ps4_titles.db) and its logs in a folder named
+ps4-title-renamer; run from anywhere else, it creates ./ps4-title-renamer and moves there.
+
 DB format (plain text, one per line, '#' comments):  ID|Title|Region
 """
-import argparse, json, os, re, struct, sys, time, unicodedata
+import argparse, json, os, re, shutil, struct, subprocess, sys, time, unicodedata
 import urllib.error, urllib.parse, urllib.request
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.realpath(__file__))   # real script folder, even when run via a symlink
 UNDO_LOG = os.path.join(HERE, 'rename_undo.log')
+DB_FILE = os.path.join(HERE, 'ps4_titles.db')
+TOOL_DIR = 'ps4-title-renamer'   # folder the script (with its db and logs) always lives in
 ID_RE = re.compile(r'(?<![A-Z])([A-Z]{4}\d{5})(?!\d)')
-SKIP = {'System Volume Information', '$RECYCLE.BIN', '.Trash-1000', '.git'}
+SKIP = {'System Volume Information', '$RECYCLE.BIN', '.Trash-1000', '.git', 'ps4-title-renamer'}
 REGIONS = {'UP': 'USA', 'EP': 'EUR', 'JP': 'JPN', 'HP': 'ASIA', 'KP': 'KOR'}
 # chars not allowed on exFAT/NTFS
 BAD = str.maketrans({':': ' - ', '/': '-', '\\': '-', '*': '', '?': '', '"': "'",
@@ -502,6 +507,67 @@ def clean_logs(root):
     print(f'{len(found)} log file(s) deleted; {UNDO_LOG} kept' if found else 'No results logs to delete.')
 
 
+def merge_db(src, dst):
+    """Add entries of db file src that dst lacks (dst entries win), write dst, delete src."""
+    db = load_db(dst) if os.path.exists(dst) else {}
+    added = {g: v for g, v in load_db(src).items() if g not in db}
+    db.update(added)
+    write_db(db, dst)
+    os.remove(src)
+    return len(added)
+
+
+def relocate():
+    """Keep the script in a folder named ps4-title-renamer: if it isn't in one, create
+    ./ps4-title-renamer under the current directory, move the script plus its db and logs
+    there, and re-run from the new location. Returns False if it stayed where it is."""
+    if os.path.basename(HERE) == TOOL_DIR:
+        return False
+    if os.path.isdir(os.path.join(HERE, '.git')):
+        print(f'Note: script folder "{HERE}" is a git clone, not moving it into {TOOL_DIR}/\n')
+        return False
+    cwd = os.getcwd()
+    target = cwd if os.path.basename(cwd) == TOOL_DIR else os.path.join(cwd, TOOL_DIR)
+    script = os.path.join(target, 'ps4_rename.py')
+    if os.path.exists(script):
+        print(f'Note: {script} already exists, not replacing it; running from {HERE}\n')
+        return False
+    os.makedirs(target, exist_ok=True)
+    print(f'Moving script to {target}/')
+    shutil.move(os.path.realpath(__file__), script)
+    # bring the db and logs along
+    for fn in sorted(os.listdir(HERE)):
+        src, dst = os.path.join(HERE, fn), os.path.join(target, fn)
+        if fn == 'ps4_titles.db':
+            if os.path.exists(dst):
+                print(f'  merged {merge_db(src, dst)} db entries into {dst}')
+            else:
+                shutil.move(src, dst)
+                print(f'  moved {fn}')
+        elif fn in ('rename_undo.log', 'rename_undo.log.done'):
+            with open(src, encoding='utf-8') as f, open(dst, 'a', encoding='utf-8') as out:
+                out.write(f.read())
+            os.remove(src)
+            print(f'  moved {fn}')
+        elif fn.startswith('rename_results_') and fn.endswith('.log') and not os.path.exists(dst):
+            shutil.move(src, dst)
+    try:
+        os.rmdir(HERE)  # old folder, only if nothing else is left in it
+        print(f'  removed empty folder {HERE}')
+    except OSError:
+        pass
+    print(flush=True)
+    sys.exit(subprocess.call([sys.executable, script] + sys.argv[1:]))
+
+
+def migrate_db(root, db_path):
+    """Merge a ps4_titles.db left in PATH by older versions into the db next to the script."""
+    old = os.path.join(root, 'ps4_titles.db')
+    if os.path.isfile(old) and os.path.abspath(old) != os.path.abspath(db_path):
+        n = merge_db(old, db_path)
+        print(f'Merged {old} into {db_path} ({n} new entries)\n')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('root', nargs='?', default='.', metavar='PATH',
@@ -514,8 +580,7 @@ def main():
     ap.add_argument('--offline', action='store_true', help="don't look up English names online when building the db")
     ap.add_argument('--no-auto-db', action='store_true',
                     help="don't run --build-db automatically when IDs are missing from the db")
-    ap.add_argument('--db', metavar='FILE', help='db file (default: PATH/ps4_titles.db, '
-                    'or ps4_titles.db next to the script if PATH has none)')
+    ap.add_argument('--db', metavar='FILE', help='db file (default: ps4_titles.db next to the script)')
     ap.add_argument('--log', metavar='FILE',
                     help='results log path (default: rename_results_<action>_<timestamp>.log in the script folder)')
     ap.add_argument('--clean-logs', action='store_true',
@@ -524,12 +589,11 @@ def main():
     a.root = os.path.abspath(a.root)
     if not os.path.isdir(a.root):
         ap.error(f'not a directory: {a.root}')
+    relocate()
     if not a.db:
-        a.db = os.path.join(a.root, 'ps4_titles.db')
-        shared = os.path.join(HERE, 'ps4_titles.db')
-        if not os.path.exists(a.db) and os.path.exists(shared):
-            a.db = shared
-    print(f'Directory: {a.root}\nDB: {a.db}\n')
+        a.db = DB_FILE
+        migrate_db(a.root, a.db)
+    print(f'Directory: {a.root}\nScript folder: {HERE}\nDB: {a.db}\n')
     undo_log = UNDO_LOG
     if a.clean_logs:
         clean_logs(a.root)

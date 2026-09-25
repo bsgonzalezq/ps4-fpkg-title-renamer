@@ -81,7 +81,13 @@ If you keep a copy of `ps4_rename.py` somewhere else, such as next to your games
 
 ## Quick start
 
-The script can live anywhere, and nothing in it depends on its location. The examples use relative paths, so adjust them to wherever you keep the script and your games.
+The script always lives in a folder named `ps4-title-renamer`, together with its db (`ps4_titles.db`) and all its logs:
+
+- **Moving itself:** if you run it from a folder with any other name, it creates `ps4-title-renamer/` in your current directory. It moves itself there along with its db and logs, removes the old folder if that's now empty, and carries on. So you can drop `ps4_rename.py` into your games folder and run it.
+- **Git clones:** the script never moves out of a git clone.
+- **Existing copy:** it won't overwrite a `ps4_rename.py` that's already in `./ps4-title-renamer/`.
+
+The examples use relative paths.
 
 The script takes one optional `PATH`: the folder that holds your PKG folders. With no `PATH` it works on the current directory. `PATH` can be relative or absolute.
 
@@ -91,31 +97,33 @@ Both examples use this layout, with the script in a subfolder of the games folde
 games/                  <- games folder (holds the PKG folders)
 ├── CUSA00900/
 ├── CUSA00419/
-└── PS4 Rename/         <- script folder
-    └── ps4_rename.py
+└── ps4-title-renamer/  <- script folder (a clone of this repo, or created automatically)
+    ├── ps4_rename.py
+    ├── ps4_titles.db
+    └── rename_undo.log, rename_results_*.log
 ```
 
 **Option 1: your terminal is in the games folder** (`games/`). No `PATH` is needed because the current directory is already the games folder:
 
 ```bash
 cd games
-python3 "PS4 Rename/ps4_rename.py" --build-db   # 1. create ps4_titles.db (optional, done automatically)
-python3 "PS4 Rename/ps4_rename.py"              # 2. dry run: shows what would change
-python3 "PS4 Rename/ps4_rename.py" --apply      # 3. rename
-python3 "PS4 Rename/ps4_rename.py" --undo       #    revert, if needed
+python3 ps4-title-renamer/ps4_rename.py --build-db   # 1. create ps4_titles.db (optional, done automatically)
+python3 ps4-title-renamer/ps4_rename.py              # 2. dry run: shows what would change
+python3 ps4-title-renamer/ps4_rename.py --apply      # 3. rename
+python3 ps4-title-renamer/ps4_rename.py --undo       #    revert, if needed
 ```
 
-**Option 2: your terminal is in the script folder** (`games/PS4 Rename/`). Pass `..`, the parent folder, as `PATH`:
+**Option 2: your terminal is in the script folder** (`games/ps4-title-renamer/`). Pass `..`, the parent folder, as `PATH`:
 
 ```bash
-cd "games/PS4 Rename"
+cd games/ps4-title-renamer
 python3 ps4_rename.py .. --build-db
 python3 ps4_rename.py ..
 python3 ps4_rename.py .. --apply
 python3 ps4_rename.py .. --undo
 ```
 
-All logs (results logs and `rename_undo.log`) are kept in the script's folder, whichever `PATH` you process. The db is read from `PATH/ps4_titles.db`, or from the `ps4_titles.db` next to the script if `PATH` has none. A new db is created in `PATH`.
+The db and all logs are always kept in the script's folder, whichever `PATH` you process, so one db serves all your game folders.
 
 Optional: to run it as just `ps4_rename.py` from anywhere, run this from the script's folder to link it into your PATH:
 
@@ -156,7 +164,7 @@ CHTM00777|PS4 Cheats Manager|HB
 
 - **Title** comes from the PKG's `param.sfo`. The English localized title (`TITLE_01`) is used when the PKG has one.
 - **Region** comes from the content ID prefix: `UP` = USA, `EP` = EUR, `JP` = JPN, `HP` = ASIA, `KP` = KOR. Homebrew is marked `HB`.
-- By default the script uses `PATH/ps4_titles.db`. If that doesn't exist, it falls back to the `ps4_titles.db` next to the script, so one db can serve several folders.
+- The db is always `ps4_titles.db` next to the script. `--db FILE` overrides this. A `ps4_titles.db` left in `PATH` by older versions is merged into it automatically and then removed.
 - `--build-db` only adds games that aren't in the db yet, so your manual edits are kept. Use `--rebuild` to start over.
 - **Automatic updates:** a normal run checks every base and patch PKG first. If an ID isn't in the db, or there's no db yet, it runs `--build-db` before renaming. So new games are picked up without running `--build-db` yourself. Use `--no-auto-db` to turn this off.
 - **Where titles come from:** the title is taken from the base game PKG. If there isn't one, the patch PKG is used, since it holds the game title too. DLC PKGs only hold the DLC's own name. An ID with only DLC, or only a folder name, is reported as not in the db and has to be added by hand.
