@@ -57,6 +57,7 @@ CUSA11253_base.pkg  (loose in root)          Dead Cells [CUSA11253]/
 - [Logs](#logs)
 - [FAQ](#faq)
 - [Notes](#notes)
+- [License](#license)
 
 ## Prerequisites
 
@@ -664,3 +665,13 @@ Yes, Windows 10/11, Linux and macOS, with Python 3.8+ and no other dependencies.
   - **Other `.pkg` files:** a file with a `.pkg` extension that isn't a PS4 PKG at all, i.e. has no PKG header, is treated like any other file. It's renamed only if its name contains a title ID, and otherwise logged as `not a PS4 pkg`.
 - `System Volume Information`, `$RECYCLE.BIN` and the script's own files are skipped.
 - Check that your install tools don't rely on ID-only folder names: folders always include the game title. Use `--add-id` to keep the ID in them too.
+
+## License
+
+Copyright (C) 2026 bsgonzalezq.
+
+This project is free software under the [GNU General Public License v3.0](LICENSE) or, at your option, any later version (`GPL-3.0-or-later`):
+
+- **Free to use and share:** you can use, study, change and share it freely, including commercially.
+- **Changes stay open:** if you distribute a modified version, or a program that includes this code, it must also be released under the GPL, with its source code.
+- **No warranty:** the software is provided as is. See [LICENSE](LICENSE) for the full terms.
