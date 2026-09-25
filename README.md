@@ -19,6 +19,34 @@ CUSA11253_base.pkg  (loose in root)          Dead Cells/
 - Safe to run again: already-renamed items are left alone
 - Output names are safe for exFAT/NTFS drives
 
+## Contents
+
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+  - [Linux / macOS](#linux--macos)
+  - [Windows](#windows)
+  - [Updating](#updating)
+- [Quick start](#quick-start)
+- [Options](#options)
+- [Title database](#title-database)
+  - [Why keep a db?](#why-keep-a-db)
+  - [GAMES section](#games-section)
+  - [PKGS section](#pkgs-section)
+  - [Using the db](#using-the-db)
+  - [Updating the db](#updating-the-db)
+  - [English names for non-English titles](#english-names-for-non-english-titles)
+- [Naming scheme](#naming-scheme)
+  - [Name style options](#name-style-options)
+  - [Loose PKGs in the top folder](#loose-pkgs-in-the-top-folder)
+- [Running again](#running-again)
+- [Undo](#undo)
+  - [Examples](#examples)
+  - [How `--undo-match` finds renames](#how---undo-match-finds-renames)
+  - [What undo takes care of](#what-undo-takes-care-of)
+  - [The undo log](#the-undo-log)
+- [Logs](#logs)
+- [Notes](#notes)
+
 ## Prerequisites
 
 | Requirement | Why |
