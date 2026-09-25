@@ -13,12 +13,16 @@ Usage:
   ps4_rename.py [PATH] --build-db      create/update the db from *.pkg files
   ps4_rename.py [PATH] --clean-logs    delete rename_results_*.log (keeps rename_undo.log)
 
-Name tags (add to a rename run; leave out on a later run to remove them again):
-  --keep-id          Bloodborne [CUSA00900]_patch.pkg          title ID after the title
-  --add-version      Bloodborne_patch [v1.09].pkg              pkg version (APP_VER / VERSION)
-  --add-content-id   Bloodborne_patch [UP9000-CUSA00900_00-BLOODBORNE000000].pkg
-  all three:         Bloodborne [CUSA00900]_patch [v1.09] [UP9000-CUSA00900_00-BLOODBORNE000000].pkg
-  Version and content ID go on .pkg files only (folders hold several pkgs).
+Name style (for a rename run; a later run with other options re-styles everything):
+  <game>[ <version>][ <content ID>]_base.pkg | _patch.pkg      (type suffix always last)
+  <game>_<DLC title>[ <version>][ <content ID>]_dlc.pkg
+  --keep-id          <game> = title + ID      Bloodborne [CUSA00900]_patch.pkg
+  --no-title         <game> = ID only         CUSA00900_patch.pkg
+  --add-version      version tag              Bloodborne [v1.09]_patch.pkg
+  --add-content-id   content ID tag           Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000]_patch.pkg
+  --sep SEP          SEP instead of spaces    --sep _ : Bloodborne_[CUSA00900]_[v1.09]_patch.pkg
+  --no-brackets      tags without [ ]         Bloodborne CUSA00900 v1.09_patch.pkg
+  Folders get <game> only; version and content ID go on .pkg files.
 
 --build-db looks up an English name online (English Wikipedia, then Wikidata)
 for any title in Japanese/Korean/Chinese and stores it in the db.
@@ -311,8 +315,9 @@ def missing_ids(root, db):
     return ids - set(db)
 
 
-TAG_RE = re.compile(r'(\s*)\[([A-Z]{4}\d{5})\]')                 # "[CUSA00900]" as added by --keep-id
-BARE_ID_RE = re.compile(r'(?<![A-Z\[])([A-Z]{4}\d{5})(?![\d\]])')
+# a title ID in a name, bare or as a "[CUSA00900]" tag; not the one inside a content ID
+# ("UP9000-CUSA00900_00-...")
+ANY_ID_RE = re.compile(r'(\[)?(?<![A-Za-z0-9])([A-Z]{4}\d{5})(?(1)\])(?![0-9])(?!_\d\d-)')
 
 
 def _alnum(s):
@@ -323,27 +328,70 @@ def safe_title(db, gid):
     return re.sub(r'\s+', ' ', db[gid][0].translate(BAD)).strip()
 
 
-def new_name(name, db, keep_id, unknown):
-    def tag(m):
-        # "Title [ID]" from an earlier run: keep it (--keep-id) or drop the tag,
-        # instead of replacing the ID again ("Title [Title]")
-        gid = m.group(2)
-        if gid not in db:
-            unknown.add(gid)
-            return m.group(0)
-        t = safe_title(db, gid)
-        if _alnum(t) in _alnum(name.replace(m.group(0), '')):
-            return m.group(0) if keep_id else ''
-        return f'{m.group(1)}{t} [{gid}]' if keep_id else f'{m.group(1)}{t}'
+class Style:
+    """How generated names look: which parts they have and how the parts are joined.
 
-    def sub(m):
-        gid = m.group(1)
+    keep_id      title followed by the title ID tag      Bloodborne [CUSA00900]
+    add_version  version tag on .pkg names                [v1.09]
+    add_cid      content ID tag on .pkg names             [UP9000-CUSA00900_00-BLOODBORNE000000]
+    no_title     title ID instead of the game title       CUSA00900
+    sep          replaces the spaces in generated names   ' ' (default), '_', '.', '' ...
+    brackets     put tags in [ ]
+    """
+
+    def __init__(self, keep_id=False, add_version=False, add_cid=False, no_title=False,
+                 sep=' ', brackets=True):
+        self.keep_id, self.add_version, self.add_cid = keep_id, add_version, add_cid
+        self.no_title, self.sep, self.brackets = no_title, sep, brackets
+
+    def tag(self, text):
+        return f'[{text}]' if self.brackets else text
+
+    def spaced(self, text):
+        return re.sub(r'\s+', ' ', text).strip().replace(' ', self.sep)
+
+    def join(self, *parts):
+        return self.sep.join(p for p in parts if p)
+
+    def game(self, db, gid):
+        """The game part of a name: "Bloodborne", "Bloodborne [CUSA00900]" or "CUSA00900"."""
+        if self.no_title or gid not in db:
+            return gid
+        title = self.spaced(safe_title(db, gid))
+        return self.join(title, self.tag(gid)) if self.keep_id else title
+
+
+def cut_title(text, title):
+    """text without a trailing game title (and separators after it), or None if it doesn't end
+    with the title. Letters/digits are compared only, so "Grand_Theft_Auto_V [" matches too."""
+    key = _alnum(title)
+    t = text.rstrip(' _.-[(')
+    if not key or not _alnum(t).endswith(key):
+        return None
+    count, i = 0, len(t)
+    while i > 0 and count < len(key):
+        i -= 1
+        count += len(_alnum(t[i]))
+    return t[:i]
+
+
+def new_name(name, db, style, unknown):
+    """Rewrite every title ID in a name (and the game title already in front of it, if any)
+    as the game part in the current style. Re-running with other options re-styles the
+    name instead of adding a second title: "Bloodborne [CUSA00900]" -> "Bloodborne",
+    "Bloodborne_CUSA00900", "CUSA00900", ..."""
+    out, pos = '', 0
+    for m in ANY_ID_RE.finditer(name):
+        gid, before = m.group(2), name[pos:m.start()]
+        pos = m.end()
         if gid not in db:
             unknown.add(gid)
-            return gid
-        t = safe_title(db, gid)
-        return f'{t} [{gid}]' if keep_id else t
-    return windows_safe(BARE_ID_RE.sub(sub, TAG_RE.sub(tag, name)))
+            out += before + m.group(0)
+            continue
+        cur = out + before
+        cut = cut_title(cur, safe_title(db, gid))
+        out = (cur if cut is None else cut) + style.game(db, gid)
+    return windows_safe(out + name[pos:])
 
 
 PKG_KINDS = {'gd': 'base', 'gde': 'base', 'gp': 'patch', 'ac': 'dlc'}   # param.sfo CATEGORY
@@ -388,27 +436,56 @@ def version_tag(ver):
     return f'v{m.group(1)}.{m.group(2)}' if m else (f'v{ver.strip()}' if ver.strip() else '')
 
 
-def pkg_name(info, db, keep_id, unknown, add_version=False, add_cid=False):
-    """File name in the <TITLE_ID>_base / _patch / _<DLC title>_dlc .pkg scheme, with the ID
-    then replaced by the game title as for any other name, plus optional
-    " [v1.09]" (--add-version) and " [<content ID>]" (--add-content-id) tags."""
+def pkg_name(info, db, style, unknown):
+    """File name from a pkg's param.sfo, type suffix always last:
+    <game>[ <version>][ <content ID>]_base.pkg / _patch.pkg
+    <game>_<DLC title>[ <version>][ <content ID>]_dlc.pkg
+    where <game> is the title (+ ID with --keep-id) or the ID (--no-title)."""
     gid, kind, dlc, ver, cid = info
-    if kind != 'dlc':
-        name = new_name(f'{gid}_{kind}.pkg', db, keep_id, unknown)
-    else:
-        dlc = re.sub(r'\s+', ' ', dlc.translate(BAD)).strip()
-        if gid in db:
+    if gid not in db:
+        unknown.add(gid)
+    head = style.game(db, gid)
+    if kind == 'dlc':
+        d = re.sub(r'\s+', ' ', dlc.translate(BAD)).strip()
+        if gid in db and not style.no_title:
             # drop the game title from the DLC title, the name already starts with it
-            dlc = strip_prefix(dlc, safe_title(db, gid)).strip(' -–_.') or dlc
-        name = new_name(f'{gid}_{dlc}_dlc.pkg', db, keep_id, unknown)
-    # tags are added after the title step: the content ID contains the title ID itself
-    tags = ''
-    if add_version and version_tag(ver):
-        tags += f' [{version_tag(ver)}]'
-    if add_cid and cid:
-        tags += f' [{cid}]'
-    stem, ext = os.path.splitext(name)
-    return windows_safe(stem + tags) + ext
+            d = strip_prefix(d, safe_title(db, gid)).strip(' -–_.') or d
+        head = f'{head}_{style.spaced(d)}'
+    tags = []
+    if style.add_version and version_tag(ver):
+        tags.append(style.tag(version_tag(ver)))
+    if style.add_cid and cid:
+        tags.append(style.tag(cid))
+    return windows_safe(f'{style.join(head, *tags)}_{kind}') + '.pkg'
+
+
+def folder_gid(path):
+    """The title ID of a folder whose pkgs (directly inside it) all belong to one game, else None."""
+    try:
+        names = os.listdir(lp(path))
+    except OSError:
+        return None
+    ids = set()
+    for fn in names:
+        if fn.lower().endswith('.pkg'):
+            info = pkg_info(os.path.join(path, fn))
+            if info:
+                ids.add(info[0])
+    return ids.pop() if len(ids) == 1 else None
+
+
+def folder_name(name, path, db, style, unknown):
+    """New name for a folder: IDs in the name are re-styled; a folder without an ID whose name
+    starts with its game's title (e.g. "Bloodborne", renamed earlier without --keep-id) is
+    re-styled from the game its pkgs belong to. Returns (new_name, reason)."""
+    if ID_RE.search(name):
+        nn = new_name(name, db, style, unknown)
+        return nn, ('ID not in db: ' + ', '.join(sorted(unknown))) if unknown else 'already named'
+    gid = folder_gid(path)
+    if not gid or gid not in db or not _alnum(name).startswith(_alnum(safe_title(db, gid)) or '\0'):
+        return name, 'no game ID in name'
+    rest = strip_prefix(name, safe_title(db, gid))
+    return windows_safe(style.game(db, gid) + rest), 'already named'
 
 
 class ResultLog:
@@ -440,22 +517,25 @@ class ResultLog:
               f'errors: {len(self.errors)}\nLog: {self.path}')
 
 
-def game_dir(root, gid, db, keep_id, planned):
+def game_dir(root, gid, db, style, planned):
     """Folder in root for a loose pkg: an existing folder for the ID, else a new one."""
     if gid in planned:  # already being created in this run
         return planned[gid], False
-    wanted = new_name(gid, db, keep_id, set())
+    wanted = windows_safe(style.game(db, gid))
     names = [d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)) and d not in SKIP]
     for d in names:  # "CUSA00900", "Bloodborne [CUSA00900]", ...
         if gid in ID_RE.findall(d):
             return d, False
-    if wanted in names:  # "Bloodborne" (renamed without --keep-id)
+    if wanted in names:
         return wanted, False
+    for d in names:  # "Bloodborne" or any folder holding only this game's pkgs
+        if folder_gid(os.path.join(root, d)) == gid:
+            return d, False
     planned[gid] = wanted
     return wanted, True
 
 
-def rename_all(root, db, keep_id, apply, undo_log, log, add_version=False, add_cid=False):
+def rename_all(root, db, style, apply, undo_log, log):
     unknown, done, planned = set(), [], {}
     claimed = set()   # targets used in this run, so dry runs catch two items getting the same name
     own = {'ps4_titles.db', 'ps4_rename.py', os.path.basename(undo_log)}
@@ -472,16 +552,18 @@ def rename_all(root, db, keep_id, apply, undo_log, log, add_version=False, add_c
             info = pkg_info(os.path.join(dp, name)) if name in fns and name.lower().endswith('.pkg') else None
             if info:
                 # PS4 pkg: name it from its param.sfo, <ID>_base / _patch / _<DLC>_dlc .pkg
-                nn = pkg_name(info, db, keep_id, missing, add_version, add_cid)
+                nn = pkg_name(info, db, style, missing)
                 reason = f'ID {info[0]} (from pkg) not in db' if missing else 'already named'
+            elif name in dns:
+                nn, reason = folder_name(name, os.path.join(dp, name), db, style, missing)
             elif ID_RE.search(name):
-                nn = new_name(name, db, keep_id, missing)
+                nn = new_name(name, db, style, missing)
                 reason = ('ID not in db: ' + ', '.join(sorted(missing))) if missing else 'already named'
             else:
                 nn, reason = name, 'no game ID in name'
             unknown |= missing
             # a pkg sitting directly in root goes into its game's folder
-            subdir, create = game_dir(root, info[0], db, keep_id, planned) if info and dp == root else ('', False)
+            subdir, create = game_dir(root, info[0], db, style, planned) if info and dp == root else ('', False)
             if nn == name and not subdir:
                 log.keep(relpath, reason)
                 continue
@@ -812,10 +894,17 @@ def main():
                     help='revert only renames whose path contains TEXT, e.g. an ID or a name '
                          '(preview; add --apply to do it)')
     ap.add_argument('--keep-id', action='store_true', help='keep the ID after the title, e.g. "Bloodborne [CUSA00900]"')
+    ap.add_argument('--no-title', action='store_true',
+                    help='use the title ID instead of the game title, e.g. "CUSA00900_patch.pkg"')
     ap.add_argument('--add-version', action='store_true',
-                    help='add the pkg version to .pkg names, e.g. "Bloodborne_patch [v1.09].pkg"')
+                    help='add the pkg version to .pkg names, e.g. "Bloodborne [v1.09]_patch.pkg"')
     ap.add_argument('--add-content-id', action='store_true',
-                    help='add the content ID to .pkg names, e.g. "Bloodborne_base [UP9000-CUSA00900_00-BLOODBORNE000000].pkg"')
+                    help='add the content ID to .pkg names, e.g. "Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000]_base.pkg"')
+    ap.add_argument('--sep', default=' ', metavar='SEP',
+                    help='separator used instead of spaces in generated names, e.g. "_" or "." '
+                         '(default: space; "" for none)')
+    ap.add_argument('--no-brackets', action='store_true',
+                    help='write tags without [ ], e.g. "Bloodborne CUSA00900 v1.09_patch.pkg"')
     ap.add_argument('--build-db', action='store_true', help='add games to the db from param.sfo inside *.pkg files')
     ap.add_argument('--rebuild', action='store_true', help='with --build-db: start a fresh db (drops old entries)')
     ap.add_argument('--offline', action='store_true', help="don't look up English names online when building the db")
@@ -831,6 +920,9 @@ def main():
     a = ap.parse_args()
     if a.keep_logs < 0:
         ap.error('--keep-logs must be 0 or more')
+    if any(c in '\\/:*?"<>|' or ord(c) < 32 for c in a.sep):
+        ap.error('--sep can\'t contain \\ / : * ? " < > | or control characters')
+    style = Style(a.keep_id, a.add_version, a.add_content_id, a.no_title, a.sep, not a.no_brackets)
     a.root = os.path.abspath(a.root)
     if not os.path.isdir(a.root):
         ap.error(f'not a directory: {a.root}')
@@ -877,7 +969,7 @@ def main():
                 build_db(a.root, a.db, offline=a.offline)
                 db = load_db(a.db)
                 print()
-            rename_all(a.root, db, a.keep_id, a.apply, undo_log, log, a.add_version, a.add_content_id)
+            rename_all(a.root, db, style, a.apply, undo_log, log)
     except NothingToDo as e:
         log = None
         sys.exit(str(e))
