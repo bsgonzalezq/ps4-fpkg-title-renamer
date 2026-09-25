@@ -211,6 +211,7 @@ Re-run the link command if you move the script.
 | `--db FILE` | Title db to use (see below) |
 | `--log FILE` | Where to write the results log (default: the script's folder) |
 | `--keep-logs N` | Number of results logs to keep; older ones are deleted. Default 5, and `0` keeps all |
+| `--export-xlsx [FILE]` | Export the db as an Excel workbook and exit. The default file is `ps4_titles.xlsx` next to the db. See [Using the db](#using-the-db) |
 | `--clean-logs` | Delete the results logs; `rename_undo.log` is kept |
 | `-h`, `--help` | Show help |
 
@@ -323,6 +324,24 @@ Select-String '\|patch\|' ps4-pkg-title-renamer\ps4_titles.db  # Windows
 ```
 
 A game with several `patch` lines has had more than one patch version on your drive. The db keeps a line for each version it has seen.
+
+**Open it in Excel.** `--export-xlsx` writes the db as a spreadsheet you can sort and filter:
+
+```bash
+python3 ps4-pkg-title-renamer/ps4_rename.py --export-xlsx                  # -> ps4-pkg-title-renamer/ps4_titles.xlsx
+python3 ps4-pkg-title-renamer/ps4_rename.py --export-xlsx my_games.xlsx    # or choose the file
+```
+
+| Sheet | Columns |
+|---|---|
+| **Games** | Title ID, Title, Region, Base version, Latest patch, DLC (count) |
+| **PKGs** | Title ID, Game, Type, Version, Content ID, Title in db (the DLC name or your label) |
+
+- **Layout:** the header row is bold and stays visible when you scroll, and every column has a filter.
+- **Values:** all values are text, so versions keep their exact form, e.g. `01.07`.
+- **Up to date:** before exporting, the db is updated from `PATH` the way a normal run does it, so the workbook is complete. `--no-auto-db` exports the db as it is.
+- **Format:** the file is `.xlsx`, which Excel, LibreOffice, Google Sheets and Numbers all open. It's written with Python's standard library, so nothing needs installing. `--export-xls` works as another name for the option, but the file is still `.xlsx`, not the old binary `.xls` format.
+- **One-way:** the workbook is only an export. Edits you make in it aren't read back, so edit `ps4_titles.db` to change names.
 
 **Work offline.** Once the db holds the English names, runs don't need internet. `--offline` skips the online lookup for any new game.
 

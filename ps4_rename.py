@@ -13,6 +13,8 @@ Usage:
                                        (+ --apply)
   ps4_rename.py [PATH] --build-db      create/update the db from *.pkg files
   ps4_rename.py [PATH] --clean-logs    delete rename_results_*.log (keeps rename_undo.log)
+  ps4_rename.py [PATH] --export-xlsx [FILE]
+                                       export the db to Excel (default: ps4_titles.xlsx next to the db)
 
 Name style (for a rename run; a later run with other options re-styles everything).
 The game title is always used, other parts are added as tags; the type tag is last by default:
@@ -52,8 +54,9 @@ DB (ps4_titles.db, plain text, '#' comments; edits are kept, --build-db --rebuil
   PKGS:   ContentID|Version|Type|TitleID|Title          UP9000-CUSA00900_00-SPEXPANSIONDLC03|01.00|dlc|CUSA00900|Bloodborne The Old Hunters
   Game titles and DLC titles are used for names; edit them to rename.
 """
-import argparse, json, os, platform, re, shutil, struct, subprocess, sys, time, unicodedata
+import argparse, json, os, platform, re, shutil, struct, subprocess, sys, time, unicodedata, zipfile
 import urllib.error, urllib.parse, urllib.request
+from xml.sax.saxutils import escape as xml_escape
 from datetime import datetime
 
 if sys.version_info < (3, 8):
@@ -1043,6 +1046,121 @@ def rotate_logs(keep=MAX_LOGS):
             print(f'could not delete old log {p}: {e.strerror}', file=sys.stderr)
 
 
+def write_xlsx(path, sheets):
+    """Write a minimal .xlsx workbook with the standard library only.
+    sheets: [(name, header, rows, widths)]; header row bold, frozen, with filters. All cells are
+    text, so versions like 01.07 and IDs keep their exact form."""
+    def cell_ref(col, row):
+        letters = ''
+        col += 1
+        while col:
+            col, rem = divmod(col - 1, 26)
+            letters = chr(65 + rem) + letters
+        return f'{letters}{row}'
+
+    def clean(v):  # XML 1.0 can't hold most control characters
+        return xml_escape(re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', str(v)))
+
+    def sheet_xml(header, rows, widths):
+        last = cell_ref(len(header) - 1, len(rows) + 1)
+        out = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+               '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
+               '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" '
+               'activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>',
+               '<cols>' + ''.join(f'<col min="{i + 1}" max="{i + 1}" width="{w}" customWidth="1"/>'
+                                  for i, w in enumerate(widths)) + '</cols>', '<sheetData>']
+        for r, values in enumerate([header] + rows, start=1):
+            style = ' s="1"' if r == 1 else ''
+            out.append(f'<row r="{r}">' + ''.join(
+                f'<c r="{cell_ref(c, r)}" t="inlineStr"{style}><is><t xml:space="preserve">{clean(v)}</t></is></c>'
+                for c, v in enumerate(values) if v != '') + '</row>')
+        out += ['</sheetData>', f'<autoFilter ref="A1:{last}"/>', '</worksheet>']
+        return '\n'.join(out), last
+
+    ns = 'http://schemas.openxmlformats.org/'
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('[Content_Types].xml',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   f'<Types xmlns="{ns}package/2006/content-types">'
+                   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                   '<Default Extension="xml" ContentType="application/xml"/>'
+                   '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                   '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+                   + ''.join(f'<Override PartName="/xl/worksheets/sheet{i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                             for i in range(len(sheets))) + '</Types>')
+        z.writestr('_rels/.rels',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   f'<Relationships xmlns="{ns}package/2006/relationships">'
+                   f'<Relationship Id="rId1" Type="{ns}officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+                   '</Relationships>')
+        names, rels, defined = [], [], []
+        for i, (name, header, rows, widths) in enumerate(sheets):
+            xml, last = sheet_xml(header, rows, widths)
+            z.writestr(f'xl/worksheets/sheet{i + 1}.xml', xml)
+            names.append(f'<sheet name="{clean(name)}" sheetId="{i + 1}" r:id="rId{i + 1}"/>')
+            rels.append(f'<Relationship Id="rId{i + 1}" Type="{ns}officeDocument/2006/relationships/worksheet" '
+                        f'Target="worksheets/sheet{i + 1}.xml"/>')
+            col, row = re.match(r'([A-Z]+)(\d+)', last).groups()
+            defined.append(f'<definedName name="_xlnm._FilterDatabase" localSheetId="{i}" hidden="1">'
+                           f"'{clean(name)}'!$A$1:${col}${row}</definedName>")
+        rels.append(f'<Relationship Id="rId{len(sheets) + 1}" Type="{ns}officeDocument/2006/relationships/styles" '
+                    'Target="styles.xml"/>')
+        z.writestr('xl/workbook.xml',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   f'<workbook xmlns="{ns}spreadsheetml/2006/main" xmlns:r="{ns}officeDocument/2006/relationships">'
+                   '<sheets>' + ''.join(names) + '</sheets><definedNames>' + ''.join(defined) + '</definedNames></workbook>')
+        z.writestr('xl/_rels/workbook.xml.rels',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   f'<Relationships xmlns="{ns}package/2006/relationships">' + ''.join(rels) + '</Relationships>')
+        z.writestr('xl/styles.xml',
+                   '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                   f'<styleSheet xmlns="{ns}spreadsheetml/2006/main">'
+                   '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>'
+                   '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+                   '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+                   '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+                   '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+                   '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+                   '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
+                   '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+                   '</styleSheet>')
+
+
+def _ver_key(v):
+    try:
+        return tuple(int(x) for x in v.split('.'))
+    except ValueError:
+        return (0,)
+
+
+def export_xlsx(db, path):
+    """Write the db as an Excel workbook: a Games sheet and a PKGs sheet."""
+    pkgs = getattr(db, 'pkgs', {})
+    by_game = {}
+    for (cid, kind, ver), (gid, title) in pkgs.items():
+        by_game.setdefault(gid, []).append((kind, ver))
+    games = []
+    for gid in sorted(db, key=lambda g: (db[g][0].lower(), g)):
+        own = by_game.get(gid, [])
+        base = sorted((v for k, v in own if k == 'base'), key=_ver_key)
+        patch = sorted((v for k, v in own if k == 'patch'), key=_ver_key)
+        games.append([gid, db[gid][0], db[gid][1], ', '.join(base), patch[-1] if patch else '',
+                      str(sum(1 for k, _ in own if k == 'dlc') or '')])
+    order = {'base': 0, 'patch': 1, 'dlc': 2}
+    rows = []
+    for (cid, kind, ver), (gid, title) in sorted(
+            pkgs.items(), key=lambda kv: ((db[kv[1][0]][0].lower() if kv[1][0] in db else kv[1][0]),
+                                          order.get(kv[0][1], 9), _ver_key(kv[0][2]), kv[0][0])):
+        rows.append([gid, db[gid][0] if gid in db else '', kind, ver, cid, title])
+    write_xlsx(path, [
+        ('Games', ['Title ID', 'Title', 'Region', 'Base version', 'Latest patch', 'DLC'], games,
+         [12, 50, 8, 13, 13, 6]),
+        ('PKGs', ['Title ID', 'Game', 'Type', 'Version', 'Content ID', 'Title in db (DLC name / label)'], rows,
+         [12, 50, 7, 9, 40, 60]),
+    ])
+    print(f'Exported {len(games)} games and {len(rows)} pkgs -> {path}')
+
+
 def clean_logs(root):
     """Delete results logs (script folder, plus old ones left in PATH); never rename_undo.log."""
     found = set()
@@ -1123,6 +1241,21 @@ def migrate_db(root, db_path):
         print(f'Merged {old} into {db_path} ({n} new entries)\n')
 
 
+def refresh_db(a):
+    """Load the db, first adding games/pkgs found in PATH that it lacks (unless --no-auto-db)."""
+    db = load_db(a.db) if os.path.exists(a.db) else TitleDB()
+    new, new_pkgs = missing_ids(a.root, db)
+    if not a.no_auto_db and (new or new_pkgs or not db):
+        # new games / pkgs found: add them to the db first (same as --build-db)
+        what = [f'{len(new)} game ID(s) ({", ".join(sorted(new))})' if new else '',
+                f'{new_pkgs} pkg(s)' if new_pkgs else '']
+        print(f'Not in db yet: {" and ".join(w for w in what if w) or "no db"}\nRunning --build-db...')
+        build_db(a.root, a.db, offline=a.offline)
+        db = load_db(a.db)
+        print()
+    return db
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('root', nargs='?', default='.', metavar='PATH',
@@ -1168,6 +1301,9 @@ def main():
                     help='results log path (default: rename_results_<action>_<timestamp>.log in the script folder)')
     ap.add_argument('--keep-logs', type=int, default=MAX_LOGS, metavar='N',
                     help=f'number of results logs to keep, oldest are deleted (default: {MAX_LOGS}, 0 = keep all)')
+    ap.add_argument('--export-xlsx', '--export-xls', nargs='?', const='', default=None, metavar='FILE',
+                    help='export the db as an Excel workbook (Games and PKGs sheets) and exit; '
+                         'default file: ps4_titles.xlsx next to the db. The db is updated from PATH first')
     ap.add_argument('--clean-logs', action='store_true',
                     help='delete rename_results_*.log files (rename_undo.log is kept) and exit')
     a = ap.parse_args()
@@ -1197,6 +1333,12 @@ def main():
     if a.clean_logs:
         clean_logs(a.root)
         return
+    if a.export_xlsx is not None:
+        out = a.export_xlsx or os.path.join(os.path.dirname(os.path.abspath(a.db)), 'ps4_titles.xlsx')
+        if not out.lower().endswith('.xlsx'):
+            out += '.xlsx'
+        export_xlsx(refresh_db(a), out)
+        return
     if a.build_db:
         build_db(a.root, a.db, a.rebuild, a.offline)
         return
@@ -1222,17 +1364,7 @@ def main():
             undo(a.root, undo_log, log, last=a.undo_last, match=a.undo_match,
                  apply=a.apply or not selective)  # plain --undo acts at once, as before
         else:
-            db = load_db(a.db) if os.path.exists(a.db) else TitleDB()
-            new, new_pkgs = missing_ids(a.root, db)
-            if not a.no_auto_db and (new or new_pkgs or not db):
-                # new games / pkgs found: add them to the db first (same as --build-db)
-                what = [f'{len(new)} game ID(s) ({", ".join(sorted(new))})' if new else '',
-                        f'{new_pkgs} pkg(s)' if new_pkgs else '']
-                print(f'Not in db yet: {" and ".join(w for w in what if w) or "no db"}\nRunning --build-db...')
-                build_db(a.root, a.db, offline=a.offline)
-                db = load_db(a.db)
-                print()
-            rename_all(a.root, db, style, a.apply, undo_log, log)
+            rename_all(a.root, refresh_db(a), style, a.apply, undo_log, log)
     except NothingToDo as e:
         log = None
         sys.exit(str(e))
