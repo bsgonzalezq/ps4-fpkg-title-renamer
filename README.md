@@ -73,27 +73,39 @@ cd ps4-title-renamer
 git pull
 ```
 
+If you keep a copy of `ps4_rename.py` somewhere else, such as next to your games, copy it over again after pulling.
+
 ## Quick start
 
-```bash
-cd /path/to/your/pkg/folders
-python3 ~/ps4-title-renamer/ps4_rename.py --build-db   # 1. create ps4_titles.db from the .pkg files
-python3 ~/ps4-title-renamer/ps4_rename.py              # 2. dry run: shows what would change
-python3 ~/ps4-title-renamer/ps4_rename.py --apply      # 3. rename
-python3 ~/ps4-title-renamer/ps4_rename.py --undo       #    revert, if needed
-```
+The script can live anywhere, and nothing in it depends on its location. The examples use relative paths, so adjust them to wherever you keep the script and your games.
 
-With no path the script works on the current directory. Pass a path to work elsewhere:
+The script takes one optional `PATH`: the folder that holds your PKG folders. With no `PATH` it works on the current directory. `PATH` can be relative or absolute.
+
+**Run from the games folder**, with the script kept in a subfolder such as `PS4 Rename/`:
 
 ```bash
-python3 ~/ps4-title-renamer/ps4_rename.py /media/usb/PS4 --apply
+python3 "PS4 Rename/ps4_rename.py" --build-db   # 1. create ps4_titles.db from the .pkg files
+python3 "PS4 Rename/ps4_rename.py"              # 2. dry run: shows what would change
+python3 "PS4 Rename/ps4_rename.py" --apply      # 3. rename
+python3 "PS4 Rename/ps4_rename.py" --undo       #    revert, if needed
 ```
 
-Optional: to run it as just `ps4_rename.py`, link it into your PATH:
+**Run from the script's folder**, pointing at the games folder:
 
 ```bash
-mkdir -p ~/.local/bin && ln -sf ~/ps4-title-renamer/ps4_rename.py ~/.local/bin/ps4_rename.py
+python3 ps4_rename.py .. --apply                # games folder is the parent directory
+python3 ps4_rename.py ../PS4 --apply            # or any other relative path
 ```
+
+`ps4_titles.db`, the results logs and `rename_undo.log` are kept in `PATH`, so they stay with your games. If `PATH` has no `ps4_titles.db`, the one next to the script is used.
+
+Optional: to run it as just `ps4_rename.py` from anywhere, run this from the script's folder to link it into your PATH:
+
+```bash
+mkdir -p ~/.local/bin && ln -sf "$PWD/ps4_rename.py" ~/.local/bin/ps4_rename.py
+```
+
+Re-run the link command if you move the script.
 
 ## Options
 
@@ -175,7 +187,7 @@ CUSA99999  (ID not in db: CUSA99999)
 CUSA00900/CUSA00900_patch.pkg  (target already exists: Bloodborne_patch.pkg)
 ```
 
-`--apply` also appends every rename to `PATH/rename_undo.log`, which `--undo` uses to restore the original names. If you move that file, move it back before running `--undo`.
+`--apply` also appends every rename to `PATH/rename_undo.log`, which `--undo` uses to restore the original names. If you move that file, move it back before running `--undo`. The log records full paths, so run `--undo` before moving or re-mounting the games folder under a different path.
 
 ## Notes
 
