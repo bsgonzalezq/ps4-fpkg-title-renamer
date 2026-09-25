@@ -16,7 +16,7 @@ Usage:
 
 Name style (for a rename run; a later run with other options re-styles everything):
   <game>[ <version>][ <content ID>][ <type>].pkg          type = [base] / [patch] / [dlc], always last
-  <game>_<DLC title>[ <version>][ <content ID>][ <type>].pkg
+  <game> = <title>[ <DLC title>][ <ID>][ <region>]         DLC title right after the game title
   --keep-id          <game> = title + ID      Bloodborne [CUSA00900] [patch].pkg
   --no-title         <game> = ID only         CUSA00900 [patch].pkg
   --add-version      version tag              Bloodborne [v1.09] [patch].pkg
@@ -471,16 +471,19 @@ class Style:
     def join(self, *parts):
         return self.sep.join(p for p in parts if p)
 
-    def game(self, db, gid):
-        """The game part of a name: "Bloodborne", "Bloodborne [CUSA00900]", "CUSA00900",
-        each optionally followed by a region tag ("[USA]")."""
+    def game(self, db, gid, extra=''):
+        """The game part of a name: "Bloodborne", "Bloodborne [CUSA00900]", "CUSA00900", each
+        optionally followed by a region tag ("[USA]"). `extra` (a DLC title) goes right after the
+        title (or the ID with --no-title), before any tag: "Bloodborne The Old Hunters [CUSA00900]"."""
+        extra = self.spaced(extra) if extra else ''
         if gid not in db:
-            return gid
+            return self.join(gid, extra)
         region = db[gid][1] if self.add_region and db[gid][1] in REGION_TAGS else ''
+        region = self.tag(region) if region else ''
         if self.no_title:
-            return self.join(gid, self.tag(region) if region else '')
+            return self.join(gid, extra, region)
         title = self.spaced(safe_title(db, gid))
-        return self.join(title, self.tag(gid) if self.keep_id else '', self.tag(region) if region else '')
+        return self.join(title, extra, self.tag(gid) if self.keep_id else '', region)
 
 
 def cut_title(text, title):
@@ -571,14 +574,14 @@ def version_tag(ver):
 
 def pkg_name(info, db, style, unknown):
     """File name from a pkg's param.sfo, type tag always last:
-    <game>[ <version>][ <content ID>] [base].pkg / [patch].pkg
-    <game>_<DLC title>[ <version>][ <content ID>] [dlc].pkg
-    where <game> is the title (+ ID with --keep-id) or the ID (--no-title); tags are joined
-    with --sep, bracketed unless --no-brackets, and the type tag is left out with --no-type."""
+    <title>[ <ID>][ <region>][ <version>][ <content ID>] [base].pkg / [patch].pkg
+    <title> <DLC title>[ <ID>][ <region>][ <version>][ <content ID>] [dlc].pkg
+    <title> is the game title, or the ID with --no-title (then no separate ID tag). Parts are
+    joined with --sep, tags bracketed unless --no-brackets, the type tag left out with --no-type."""
     gid, kind, dlc, ver, cid = info
     if gid not in db:
         unknown.add(gid)
-    head = style.game(db, gid)
+    d = ''
     if kind == 'dlc':
         # the db's DLC title (translated or edited) wins over the one in the pkg
         dlc = (db.dlc_title(cid) if hasattr(db, 'dlc_title') else None) or dlc
@@ -592,7 +595,7 @@ def pkg_name(info, db, style, unknown):
                 if cut != d:
                     d = cut.strip(' -–_.') or d
                     break
-        head = f'{head}_{style.spaced(d)}'
+    head = style.game(db, gid, d)   # DLC title right after the game title, before the tags
     tags = []
     if style.add_version and version_tag(ver):
         tags.append(style.tag(version_tag(ver)))
