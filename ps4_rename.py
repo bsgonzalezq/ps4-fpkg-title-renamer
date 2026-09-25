@@ -14,18 +14,19 @@ Usage:
   ps4_rename.py [PATH] --build-db      create/update the db from *.pkg files
   ps4_rename.py [PATH] --clean-logs    delete rename_results_*.log (keeps rename_undo.log)
 
-Name style (for a rename run; a later run with other options re-styles everything):
-  <game>[ <version>][ <content ID>][ <type>].pkg          type = [base] / [patch] / [dlc], always last
-  <game> = <title>[ <DLC title>][ <ID>][ <region>]         DLC title right after the game title
-  --keep-id          <game> = title + ID      Bloodborne [CUSA00900] [patch].pkg
-  --no-title         <game> = ID only         CUSA00900 [patch].pkg
+Name style (for a rename run; a later run with other options re-styles everything).
+The game title is always used, other parts are added as tags; the type tag is always last:
+  <title>[ <DLC title>][ <ID>][ <region>][ <version>][ <content ID>][ <type>].pkg
+  --add-id           title ID tag             Bloodborne [CUSA00900] [patch].pkg
+  --add-region       region tag               Bloodborne [USA] [patch].pkg
   --add-version      version tag              Bloodborne [v1.09] [patch].pkg   (patch: APP_VER, base/DLC: VERSION)
   --add-content-id   content ID tag           Bloodborne [UP9000-CUSA00900_00-BLOODBORNE000000] [patch].pkg
   --no-type          no type tag              Bloodborne [v1.09].pkg
-  --add-region       region tag after title   Bloodborne [CUSA00900] [USA] [patch].pkg
+  --no-title         no game title in .pkg    [CUSA00900] [v1.09] [patch].pkg   (needs --add-id or --add-content-id)
   --sep SEP          SEP instead of spaces    --sep _ : Bloodborne_[CUSA00900]_[v1.09]_[patch].pkg
   --no-brackets      tags without [ ]         Bloodborne CUSA00900 v1.09 patch.pkg
-  Folders get <game> (+ region); version, content ID and type go on .pkg files.
+  Folders: <title>[ <ID>][ <region>], always with the title; version, content ID and type
+  go on .pkg files only. DLC keep their DLC title: The Old Hunters [CUSA00900] [dlc].pkg
 
 --build-db looks up an English name online (English Wikipedia, then Wikidata)
 for any title in Japanese/Korean/Chinese and stores it in the db.
@@ -450,19 +451,19 @@ def safe_title(db, gid):
 class Style:
     """How generated names look: which parts they have and how the parts are joined.
 
-    keep_id      title followed by the title ID tag      Bloodborne [CUSA00900]
+    add_id       title ID tag after the title             Bloodborne [CUSA00900]
     add_version  version tag on .pkg names                [v1.09]
     add_cid      content ID tag on .pkg names             [UP9000-CUSA00900_00-BLOODBORNE000000]
-    no_title     title ID instead of the game title       CUSA00900
+    no_title     no game title in .pkg names (folders keep it); needs add_id or add_cid
     sep          replaces the spaces in generated names   ' ' (default), '_', '.', '' ...
     brackets     put tags in [ ]
     no_type      leave out the type tag                   [base] / [patch] / [dlc]
     add_region   region tag after the title/ID            [USA]
     """
 
-    def __init__(self, keep_id=False, add_version=False, add_cid=False, no_title=False,
+    def __init__(self, add_id=False, add_version=False, add_cid=False, no_title=False,
                  sep=' ', brackets=True, no_type=False, add_region=False):
-        self.keep_id, self.add_version, self.add_cid = keep_id, add_version, add_cid
+        self.add_id, self.add_version, self.add_cid = add_id, add_version, add_cid
         self.no_title, self.sep, self.brackets, self.no_type = no_title, sep, brackets, no_type
         self.add_region = add_region
 
@@ -475,19 +476,21 @@ class Style:
     def join(self, *parts):
         return self.sep.join(p for p in parts if p)
 
-    def game(self, db, gid, extra=''):
-        """The game part of a name: "Bloodborne", "Bloodborne [CUSA00900]", "CUSA00900", each
-        optionally followed by a region tag ("[USA]"). `extra` (a DLC title) goes right after the
-        title (or the ID with --no-title), before any tag: "Bloodborne The Old Hunters [CUSA00900]"."""
+    def game(self, db, gid, extra='', file=False):
+        """The game part of a name: "Bloodborne", "Bloodborne [CUSA00900]", optionally followed by
+        a region tag ("[USA]"). `extra` (a DLC title / patch label) goes right after the title,
+        before any tag: "Bloodborne The Old Hunters [CUSA00900]". For .pkg files with --no-title
+        the title is left out: "The Old Hunters [CUSA00900]" (folders always keep it)."""
         extra = self.spaced(extra) if extra else ''
-        if gid not in db:
-            return self.join(gid, extra)
-        region = db[gid][1] if self.add_region and db[gid][1] in REGION_TAGS else ''
+        known = gid in db
+        region = db[gid][1] if known and self.add_region and db[gid][1] in REGION_TAGS else ''
         region = self.tag(region) if region else ''
-        if self.no_title:
-            return self.join(gid, extra, region)
+        if file and self.no_title:
+            return self.join(extra, self.tag(gid) if self.add_id else '', region)
+        if not known:
+            return self.join(gid, extra)
         title = self.spaced(safe_title(db, gid))
-        return self.join(title, extra, self.tag(gid) if self.keep_id else '', region)
+        return self.join(title, extra, self.tag(gid) if self.add_id else '', region)
 
 
 def cut_title(text, title):
@@ -589,8 +592,9 @@ def pkg_name(info, db, style, unknown):
     """File name from a pkg's param.sfo, type tag always last:
     <title>[ <ID>][ <region>][ <version>][ <content ID>] [base].pkg / [patch].pkg
     <title> <DLC title>[ <ID>][ <region>][ <version>][ <content ID>] [dlc].pkg
-    <title> is the game title, or the ID with --no-title (then no separate ID tag). Parts are
-    joined with --sep, tags bracketed unless --no-brackets, the type tag left out with --no-type.
+    <title> is the game title; --no-title leaves it out (only the DLC title / label and tags
+    remain). Parts are joined with --sep, tags bracketed unless --no-brackets, the type tag left
+    out with --no-type.
     A base/patch Title edited in the db's PKGS section works like a DLC title: what it adds to
     the game title goes right after it ("... Soundtrack Restoration Mod [patch].pkg")."""
     gid, kind, ptitle, ver, cid = info
@@ -607,8 +611,9 @@ def pkg_name(info, db, style, unknown):
         text = line[1] if line and line[1] and line[1] != ptitle else ''
         titles = [safe_title(db, gid), ptitle] if gid in db else [ptitle]
     d = re.sub(r'\s+', ' ', text.translate(BAD)).strip()
-    if d and gid in db and not style.no_title:
-        # drop the game title from the start, the name already starts with it; try the db title
+    if d and gid in db:
+        # drop the game title from the start (the name starts with it, or --no-title removes it);
+        # try the db title
         # and the title as the game's own pkgs spell it (the db one may be edited)
         for t in sorted((t for t in titles if t), key=lambda t: -len(_alnum(t))):
             cut = strip_prefix(d, t.translate(BAD))
@@ -616,7 +621,7 @@ def pkg_name(info, db, style, unknown):
                 cut = cut.strip(' -–_.')
                 d = cut or (d if kind == 'dlc' else '')
                 break
-    head = style.game(db, gid, d)   # DLC / edited title right after the game title, before the tags
+    head = style.game(db, gid, d, file=True)   # DLC / edited title right after the game title, before the tags
     tags = []
     if style.add_version and version_tag(ver):
         tags.append(style.tag(version_tag(ver)))
@@ -881,7 +886,7 @@ def undo(root, undo_log, log, last=False, match=None, apply=True):
             return os.path.relpath(p, root).lower()
         sel = {i for i in cand if text in rel(entries[i]['dst'])
                or (not entries[i]['mkdir'] and text in rel(entries[i]['src']))}
-        # later renames of a selected item (e.g. a second run with/without --keep-id)
+        # later renames of a selected item (e.g. a second run with/without --add-id)
         for j in cand:
             ej = entries[j]
             if j in sel or ej['mkdir']:
@@ -1085,9 +1090,12 @@ def main():
     ap.add_argument('--undo-match', metavar='TEXT',
                     help='revert only renames whose path contains TEXT, e.g. an ID or a name '
                          '(preview; add --apply to do it)')
-    ap.add_argument('--keep-id', action='store_true', help='keep the ID after the title, e.g. "Bloodborne [CUSA00900]"')
+    ap.add_argument('--add-id', action='store_true',
+                    help='add the title ID tag after the title, e.g. "Bloodborne [CUSA00900] [patch].pkg"')
+    ap.add_argument('--keep-id', dest='add_id', action='store_true', help=argparse.SUPPRESS)  # old name
     ap.add_argument('--no-title', action='store_true',
-                    help='use the title ID instead of the game title, e.g. "CUSA00900 [patch].pkg"')
+                    help='leave the game title out of .pkg file names (folders keep it); needs --add-id '
+                         'or --add-content-id, e.g. "[CUSA00900] [v1.09] [patch].pkg"')
     ap.add_argument('--add-version', action='store_true',
                     help='add the pkg version to .pkg names, e.g. "Bloodborne [v1.09] [patch].pkg" '
                          '(patches: APP_VER; base games and DLC: VERSION)')
@@ -1119,7 +1127,10 @@ def main():
         ap.error('--keep-logs must be 0 or more')
     if any(c in '\\/:*?"<>|' or ord(c) < 32 for c in a.sep):
         ap.error('--sep can\'t contain \\ / : * ? " < > | or control characters')
-    style = Style(a.keep_id, a.add_version, a.add_content_id, a.no_title, a.sep, not a.no_brackets, a.no_type,
+    if a.no_title and not (a.add_id or a.add_content_id):
+        ap.error('--no-title needs --add-id or --add-content-id, so every file keeps an ID '
+                 'that says which game it belongs to')
+    style = Style(a.add_id, a.add_version, a.add_content_id, a.no_title, a.sep, not a.no_brackets, a.no_type,
                   a.add_region)
     a.root = os.path.abspath(a.root)
     if not os.path.isdir(a.root):
