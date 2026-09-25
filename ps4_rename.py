@@ -217,15 +217,74 @@ def build_db(root, path, rebuild=False, offline=False):
     print(f'{found} new entries, {len(db)} total -> {path}')
 
 
+TAG_RE = re.compile(r'(\s*)\[([A-Z]{4}\d{5})\]')                 # "[CUSA00900]" as added by --keep-id
+BARE_ID_RE = re.compile(r'(?<![A-Z\[])([A-Z]{4}\d{5})(?![\d\]])')
+
+
+def _alnum(s):
+    return re.sub(r'[\W_]', '', unicodedata.normalize('NFKC', s)).lower()
+
+
+def safe_title(db, gid):
+    return re.sub(r'\s+', ' ', db[gid][0].translate(BAD)).strip()
+
+
 def new_name(name, db, keep_id, unknown):
+    def tag(m):
+        # "Title [ID]" from an earlier run: keep it (--keep-id) or drop the tag,
+        # instead of replacing the ID again ("Title [Title]")
+        gid = m.group(2)
+        if gid not in db:
+            unknown.add(gid)
+            return m.group(0)
+        t = safe_title(db, gid)
+        if _alnum(t) in _alnum(name.replace(m.group(0), '')):
+            return m.group(0) if keep_id else ''
+        return f'{m.group(1)}{t} [{gid}]' if keep_id else f'{m.group(1)}{t}'
+
     def sub(m):
         gid = m.group(1)
         if gid not in db:
             unknown.add(gid)
             return gid
-        t = re.sub(r'\s+', ' ', db[gid][0].translate(BAD)).strip()
+        t = safe_title(db, gid)
         return f'{t} [{gid}]' if keep_id else t
-    return ID_RE.sub(sub, name).rstrip(' .')
+    return BARE_ID_RE.sub(sub, TAG_RE.sub(tag, name)).rstrip(' .')
+
+
+def pkg_name(name, path, db, keep_id):
+    """Name for a .pkg whose file name has no game ID, using the ID from its param.sfo.
+
+    Returns (new_name, reason); new_name is None when the file should stay as-is.
+    """
+    try:
+        r = read_sfo(path)
+    except (OSError, ValueError, struct.error) as e:
+        return None, f'no game ID in name, could not read pkg: {e}'
+    if not r:
+        return None, 'no game ID in name, not a PS4 pkg'
+    cid, sfo = r
+    gid = sfo.get('TITLE_ID') or cid[7:16]
+    if gid not in db:
+        return None, f'ID {gid} (from pkg) not in db'
+    title = safe_title(db, gid)
+    stem, ext = os.path.splitext(name)
+    stem = re.sub(r'\s+', ' ', stem.translate(BAD)).strip(' .')
+    key, stem_key = _alnum(title), _alnum(stem)
+    if key and key in stem_key:
+        if not keep_id:
+            return None, f'title already in name ({gid} from pkg)'
+        if stem_key.startswith(key):
+            # put the ID right after the title: "Dead Cells [CUSA11253] - The Bad Seed"
+            count, i = 0, 0
+            while i < len(stem) and count < len(key):
+                count += len(_alnum(stem[i]))
+                i += 1
+            return f'{stem[:i]} [{gid}]{stem[i:]}{ext}', ''
+        return f'{stem} [{gid}]{ext}', ''
+    # title missing: prefix it, e.g. "Pre-order.pkg" -> "FANTASY LIFE i ... - Pre-order.pkg"
+    tagged = f'{title} [{gid}]' if keep_id else title
+    return f'{tagged} - {stem}{ext}', ''
 
 
 class ResultLog:
@@ -270,15 +329,18 @@ def rename_all(root, db, keep_id, apply, undo_log, log):
                 continue
             relpath = os.path.normpath(os.path.join(rel, name))
             missing = set()
-            nn = new_name(name, db, keep_id, missing)
+            if ID_RE.search(name):
+                nn = new_name(name, db, keep_id, missing)
+                reason = ('ID not in db: ' + ', '.join(sorted(missing))) if missing else 'already named'
+            elif name.lower().endswith('.pkg') and name in fns:
+                # no ID in the file name: take it from the pkg's param.sfo
+                nn, reason = pkg_name(name, os.path.join(dp, name), db, keep_id)
+                nn = nn or name
+            else:
+                nn, reason = name, 'no game ID in name'
             unknown |= missing
             if nn == name:
-                if missing:
-                    log.keep(relpath, 'ID not in db: ' + ', '.join(sorted(missing)))
-                elif ID_RE.search(name):
-                    log.keep(relpath, 'title same as current name')
-                else:
-                    log.keep(relpath, 'no game ID in name')
+                log.keep(relpath, reason)
                 continue
             src, dst = os.path.join(dp, name), os.path.join(dp, nn)
             if os.path.exists(dst):

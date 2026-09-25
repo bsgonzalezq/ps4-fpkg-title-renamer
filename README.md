@@ -11,6 +11,8 @@ CUSA00900/                          Bloodborne/
 - Reads titles directly from the `param.sfo` inside each `.pkg`, so no guessing or online title-ID database is needed
 - Looks up English names online for Japanese / Korean / Chinese titles
 - Dry run by default, with a results log and a one-command undo
+- PKGs without an ID in their name (DLC, add-ons) are identified from their `param.sfo` too
+- Safe to run again: already-renamed items are left alone
 - Output names are safe for exFAT/NTFS drives
 
 ## Prerequisites
@@ -140,6 +142,24 @@ CUSA32997: 怒首領蜂大往生 臨廻転生   ->  DoDonPachi DaiOuJou
 - If nothing is found, the original title is kept.
 - Requests are limited to about one per second to respect Wikimedia's rate limits.
 
+## PKGs without an ID in the name
+
+DLC and add-on PKGs are often named without an ID, like `Pre-order.pkg`. For these, the script reads the title ID from the PKG's own `param.sfo`, looks up the game title in the db, and adds it to the name:
+
+| File | Default | `--keep-id` |
+|---|---|---|
+| `Pre-order.pkg` (title missing) | `FANTASY LIFE i - The Girl Who Steals Time - Pre-order.pkg` | `FANTASY LIFE i - The Girl Who Steals Time [CUSA52673] - Pre-order.pkg` |
+| `Dead Cells - The Bad Seed.pkg` (title present) | unchanged | `Dead Cells [CUSA11253] - The Bad Seed.pkg` |
+
+Other files without an ID, such as logs, are left alone.
+
+## Running again
+
+Running the script again on renamed items doesn't rename them twice:
+
+- With `--keep-id`, names like `Bloodborne [CUSA00900]` are left as they are.
+- Without `--keep-id`, the ` [CUSA00900]` tag is removed, giving `Bloodborne`. So you can switch between the two styles by re-running with or without the option.
+
 ## Logs
 
 Every run except `--build-db` writes `rename_results_<dryrun|apply|undo>_<timestamp>.log` into `PATH`:
@@ -148,7 +168,8 @@ Every run except `--build-db` writes `rename_results_<dryrun|apply|undo>_<timest
 === CHANGED (143) ===
 CUSA00900/CUSA00900_base.pkg  ->  Bloodborne_base.pkg
 === NOT CHANGED (39) ===
-Bloodborne [CUSA00900]/Bloodborne The Old Hunters.pkg  (no game ID in name)
+itemzflow/daemon.log  (no game ID in name)
+Dead Cells [CUSA11253]/Dead Cells - The Bad Seed.pkg  (title already in name (CUSA11253 from pkg))
 CUSA99999  (ID not in db: CUSA99999)
 === ERRORS (1) ===
 CUSA00900/CUSA00900_patch.pkg  (target already exists: Bloodborne_patch.pkg)
