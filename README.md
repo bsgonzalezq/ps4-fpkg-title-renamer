@@ -13,7 +13,7 @@ CUSA11253_base.pkg  (loose in root)          Dead Cells/
 
 - Reads titles directly from the `param.sfo` inside each `.pkg`, so no guessing or online title-ID database is needed
 - Looks up English names online for Japanese / Korean / Chinese titles
-- Dry run by default, with a results log and a one-command undo
+- Dry run by default, with a results log and undo: everything, only the last run, or only matching names ([Undo](#undo))
 - Base game, patch or DLC is detected from each PKG's `param.sfo`, not from the file name
 - Loose PKGs in the top folder are moved into their game's folder, which is created if needed
 - Safe to run again: already-renamed items are left alone
@@ -121,7 +121,8 @@ cd games
 python3 ps4-title-renamer/ps4_rename.py --build-db   # 1. create ps4_titles.db (optional, done automatically)
 python3 ps4-title-renamer/ps4_rename.py              # 2. dry run: shows what would change
 python3 ps4-title-renamer/ps4_rename.py --apply      # 3. rename
-python3 ps4-title-renamer/ps4_rename.py --undo       #    revert, if needed
+python3 ps4-title-renamer/ps4_rename.py --undo       #    revert everything, if needed
+python3 ps4-title-renamer/ps4_rename.py --undo-last  #    or preview reverting just the last run (see Undo)
 ```
 
 **Option 2: your terminal is in the script folder** (`games/ps4-title-renamer/`). Pass `..`, the parent folder, as `PATH`:
@@ -132,6 +133,7 @@ python3 ps4_rename.py .. --build-db
 python3 ps4_rename.py ..
 python3 ps4_rename.py .. --apply
 python3 ps4_rename.py .. --undo
+python3 ps4_rename.py .. --undo-last
 ```
 
 The db and all logs are always kept in the script's folder, whichever `PATH` you process, so one db serves all your game folders.
@@ -219,7 +221,7 @@ A PKG directly in `PATH`, rather than in a game folder, is moved into its game's
 
 - **Existing folder:** if one exists for that ID, like `CUSA00900/`, `Bloodborne [CUSA00900]/` or `Bloodborne/`, the PKG is moved there.
 - **New folder:** otherwise a folder is created, named like the other game folders: `Bloodborne/`, or `Bloodborne [CUSA00900]/` with `--keep-id`.
-- **Undo:** `--undo` moves the PKG back and removes any folder it created.
+- **Undo:** any undo that covers the PKG, whether `--undo`, `--undo-last` or `--undo-match`, moves it back and removes the folder it created once that's empty.
 
 ## Running again
 
@@ -227,6 +229,71 @@ Running the script again on renamed items doesn't rename them twice:
 
 - With `--keep-id`, names like `Bloodborne [CUSA00900]` are left as they are.
 - Without `--keep-id`, the ` [CUSA00900]` tag is removed, giving `Bloodborne`. So you can switch between the two styles by re-running with or without the option.
+
+## Undo
+
+Every `--apply` records each rename and move in `rename_undo.log`, in the script's folder, so you can reverse them later. There are three ways to undo:
+
+| Command | Reverts | Acts |
+|---|---|---|
+| `--undo` | Everything recorded under `PATH`, from every `--apply` run | Immediately |
+| `--undo-last` | Only the most recent `--apply` run under `PATH` | Preview. Add `--apply` to do it |
+| `--undo-match TEXT` | Only renames whose path contains `TEXT` | Preview. Add `--apply` to do it |
+
+`--undo-last` and `--undo-match` can be combined, for example to undo only the matching renames from the last run. Undo always works newest first.
+
+### Examples
+
+Run these from the games folder:
+
+```bash
+# revert everything
+python3 ps4-title-renamer/ps4_rename.py --undo
+
+# step back one --apply run at a time: preview, then do it
+python3 ps4-title-renamer/ps4_rename.py --undo-last
+python3 ps4-title-renamer/ps4_rename.py --undo-last --apply
+
+# a single file
+python3 ps4-title-renamer/ps4_rename.py --undo-match "Old Hunters" --apply
+
+# one game: its folder and every file in it
+python3 ps4-title-renamer/ps4_rename.py --undo-match Bloodborne --apply
+
+# games in another folder: pass it as PATH
+python3 ps4-title-renamer/ps4_rename.py ../other-games --undo-last --apply
+```
+
+A preview lists every rename it would revert as `current name -> original name` and changes nothing:
+
+```
+/games/Bloodborne/Bloodborne_The Old Hunters_dlc.pkg -> /games/Bloodborne/Bloodborne The Old Hunters.pkg  (preview)
+
+Preview only. Re-run with --apply to undo.
+```
+
+### How `--undo-match` finds renames
+
+- **What's compared:** the text is compared, ignoring case, with the old and the new path of each rename, relative to `PATH`.
+- **Folder names:** a game or folder name matches the folder and everything in it. `Bloodborne` matches `Bloodborne/`, `Bloodborne_base.pkg`, `Bloodborne_The Old Hunters_dlc.pkg` and so on.
+- **Title IDs:** an ID only matches where it appears in the old or new name. Folders and base/patch files always had the ID in their original name. A DLC file without `--keep-id` usually didn't, e.g. `Bloodborne The Old Hunters.pkg` became `Bloodborne_The Old Hunters_dlc.pkg`. Use the game name to catch a whole game.
+- **Check first:** run without `--apply` to see exactly what matches.
+
+### What undo takes care of
+
+- **Renamed folders:** a single file can be reverted even after its folder was renamed. It's renamed back inside the folder's current name.
+- **Items renamed more than once:** if an item was renamed again in a later run, for example a re-run with `--keep-id`, `--undo-match` reverts those later renames too. Otherwise the log would no longer match the files.
+- **Loose PKGs:** a PKG that was moved into its game folder goes back to `PATH`. A folder the script created for it is removed once it's empty. If it isn't empty yet, it stays in the log and is removed by a later undo.
+- **Several game folders:** every `PATH` shares the same `rename_undo.log`, but undo only touches entries under the `PATH` you give it. Entries for other folders stay in the log.
+- **Case-only renames:** renames that only change letter case are handled on case-insensitive drives, such as NTFS and exFAT.
+
+### The undo log
+
+- **Archive:** reverted entries are moved to `rename_undo.log.done` with a note of what was undone and when. Entries that couldn't be restored stay in `rename_undo.log` so you can retry.
+- **Runs:** each `--apply` run starts with a `# <timestamp>` line in the log. That's how `--undo-last` knows where the last run begins.
+- **Full paths:** the log records full paths. Run undo before moving or re-mounting the games folder under a different path or drive letter, and on the same OS you used for `--apply`.
+- **Never deleted automatically:** `--clean-logs` and log rotation never delete `rename_undo.log` or `rename_undo.log.done`.
+- **Older versions:** older versions of the script kept `rename_undo.log` in `PATH`. It's merged into the script-folder log automatically on the next run.
 
 ## Logs
 
@@ -243,26 +310,7 @@ CUSA99999  (ID not in db: CUSA99999)
 CUSA00900/CUSA00900_patch.pkg  (target already exists: Bloodborne_patch.pkg)
 ```
 
-`--apply` also appends every rename to `rename_undo.log`, which `--undo` uses to restore the original names:
-
-- **One log for all folders:** every `PATH` you process shares the same undo log, so `--undo` only reverts entries under the `PATH` you give it. Entries for other folders stay in the log.
-- **Undo only part of it:**
-
-  ```bash
-  python3 ps4-title-renamer/ps4_rename.py --undo-last                    # preview: what the last run would revert
-  python3 ps4-title-renamer/ps4_rename.py --undo-last --apply            # revert only the last --apply run
-  python3 ps4-title-renamer/ps4_rename.py --undo-match "Old Hunters" --apply   # one file
-  python3 ps4-title-renamer/ps4_rename.py --undo-match Bloodborne --apply      # one game: folder + all its files
-  ```
-
-  - **Matching:** `--undo-match` compares the text, ignoring case, with the old and the new path of each rename, relative to `PATH`. A game name or folder name matches the folder and everything in it. A title ID only matches where the ID actually appears in the old or new name, so use the game name to catch a whole game.
-  - **Renamed folders:** you can revert a single file even after its folder was renamed. It's renamed back inside the folder's current name.
-  - **Items renamed more than once:** if an item was renamed again in a later run, for example re-run with `--keep-id`, the later renames are reverted too, so the log stays consistent.
-  - **Loose PKGs:** a PKG that was moved into a created folder goes back to `PATH`. The folder is removed once it's empty.
-  - **Preview first:** `--undo-last` and `--undo-match` only preview until you add `--apply`. Plain `--undo` acts immediately, as before.
-- **Archive:** reverted entries are moved to `rename_undo.log.done`. Entries that couldn't be restored stay in the log so you can try again.
-- **Full paths:** the log records full paths, so run `--undo` before moving or re-mounting the games folder under a different path.
-- **Older versions:** older versions of the script kept `rename_undo.log` in `PATH`. It's merged into the script-folder log automatically on the next run.
+`--apply` also records every rename in `rename_undo.log`, which the undo options use. See [Undo](#undo).
 
 To delete old results logs:
 
