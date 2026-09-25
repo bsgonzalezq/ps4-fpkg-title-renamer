@@ -1,26 +1,35 @@
-# ps4-pkg-title-renamer
+# PS4 PKG Title Renamer
 
-Renames PS4 PKG files to a consistent `<game> [base]` / `[patch]` / `<game> <DLC> [dlc]` scheme, puts each game in its own folder, and replaces title IDs (`CUSA00900`, `CHTM00777`, ...) with the game's title.
+**Rename PS4 `.pkg` files and `CUSA` title-ID folders to game names, automatically.** `ps4-pkg-title-renamer` reads the `param.sfo` inside each PS4 PKG. From it, the script gets the game title, title ID, type (base game, patch or DLC), version and content ID, and uses them to give every file and folder a clear, consistent name. It's a small Python script with no dependencies, and it runs on Linux, macOS and Windows.
 
 ```
-CUSA00900/                                   Bloodborne/
-├── CUSA00900_base.pkg                ->     ├── Bloodborne [base].pkg
-├── update.pkg                               ├── Bloodborne [patch].pkg
-└── Bloodborne The Old Hunters.pkg           └── Bloodborne The Old Hunters [dlc].pkg
-CUSA11253_base.pkg  (loose in root)          Dead Cells/
-                                             └── Dead Cells [base].pkg
+CUSA00900/                                   Bloodborne [CUSA00900]/
+├── CUSA00900_base.pkg                ->     ├── Bloodborne [CUSA00900] [v1.00] [base].pkg
+├── update.pkg                               ├── Bloodborne [CUSA00900] [v1.09] [patch].pkg
+└── Bloodborne The Old Hunters.pkg           └── Bloodborne The Old Hunters [CUSA00900] [v1.00] [dlc].pkg
+CUSA11253_base.pkg  (loose in root)          Dead Cells [CUSA11253]/
+                                             └── Dead Cells [CUSA11253] [v1.00] [base].pkg
 ```
+<sub>Example with `--keep-id --add-version`. The default is just `Bloodborne [base].pkg`, and every tag is optional.</sub>
 
-- Reads titles directly from the `param.sfo` inside each `.pkg`, so no guessing or online title-ID database is needed
-- Looks up English names online for Japanese / Korean / Chinese titles
-- Dry run by default, with a results log and undo: everything, only the last run, or only matching names ([Undo](#undo))
-- Base game, patch or DLC is detected from each PKG's `param.sfo`, not from the file name
-- Loose PKGs in the top folder are moved into their game's folder, which is created if needed
-- Safe to run again: already-renamed items are left alone
-- Output names are safe for exFAT/NTFS drives
+## Features
+
+- **Renames by what's inside the PKG,** not by its file name. It uses the title, title ID, type, version and content ID from `param.sfo`, so it needs no guessing and no online title-ID database.
+- **Recognises base games, patches and DLC** (`CATEGORY` `gd`, `gp`, `ac`) and tags them `[base]`, `[patch]` and `[dlc]`.
+- **Optional tags:** title ID (`CUSA00900`), version (`v1.09`), region (`USA`/`EUR`/`JPN`/`ASIA`), content ID. You can also choose the separator, write tags without brackets, or name by ID only.
+- **Turns `CUSA` / `CUSAXXXXX` folders into game-name folders,** and moves loose PKGs into their game's folder.
+- **English names** for Japanese / Korean / Chinese titles, looked up online once and stored in an editable title database.
+- **Safe:**
+  - Dry run by default, with a results log.
+  - Undo everything, only the last run, or only matching names ([Undo](#undo)).
+  - Never overwrites a file.
+  - Never changes the contents of a PKG, only names.
+- **Detects broken PKGs:** those with a corrupt or missing `param.sfo` are reported and left alone.
+- **Safe for exFAT/NTFS drives:** names are valid on USB drives used with a PS4, GoldHEN or Itemzflow.
 
 ## Contents
 
+- [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
   - [Linux / macOS](#linux--macos)
@@ -45,6 +54,7 @@ CUSA11253_base.pkg  (loose in root)          Dead Cells/
   - [What undo takes care of](#what-undo-takes-care-of)
   - [The undo log](#the-undo-log)
 - [Logs](#logs)
+- [FAQ](#faq)
 - [Notes](#notes)
 
 ## Prerequisites
@@ -519,6 +529,37 @@ python3 ps4_rename.py --clean-logs
 ```
 
 This deletes every `rename_results_*.log` in the script's folder, plus any left in `PATH` by older versions. It never deletes `rename_undo.log` or `rename_undo.log.done`.
+
+## FAQ
+
+**How do I rename PS4 PKG files to their game names?**
+Put the script in your PKG folder and run a dry run, then apply:
+```bash
+python3 ps4-pkg-title-renamer/ps4_rename.py            # preview
+python3 ps4-pkg-title-renamer/ps4_rename.py --apply    # rename
+```
+See [Quick start](#quick-start) for more.
+
+**What is a CUSA number / PS4 title ID?**
+Every PS4 game has a title ID such as `CUSA00900`, which is Bloodborne (USA). PKG dumps and downloads are often named only by that ID or by their content ID, e.g. `UP9000-CUSA00900_00-BLOODBORNE000000`. The script reads the ID and the real game title from the PKG's `param.sfo` and renames the files for you.
+
+**How can I tell whether a PKG is the base game, a patch (update) or DLC?**
+The script reads the `CATEGORY` field in `param.sfo` (`gd` = base game, `gp` = patch, `ac` = DLC/add-on) and tags the file `[base]`, `[patch]` or `[dlc]`. Add `--add-version` to also see the version, e.g. `[v1.09]` for a patch.
+
+**Does it work with fake PKGs (fPKG), GoldHEN and Itemzflow?**
+It works with any PS4 PKG whose `param.sfo` can be read, which includes fake PKGs and homebrew. It only renames files and folders. It never changes the contents of a PKG, so the PKGs install the same way afterwards. Check whether your install tool expects ID-named folders. If it does, use `--keep-id` or `--no-title`.
+
+**Can I keep the CUSA ID in the name?**
+Yes, `--keep-id` gives `Bloodborne [CUSA00900] [base].pkg`. `--no-title` gives `CUSA00900 [base].pkg`, and `--add-region` adds `[USA]`.
+
+**Can I undo a rename?**
+Yes. `--undo` reverts everything, `--undo-last` reverts the last run, and `--undo-match TEXT` reverts only matching names, e.g. one game or one file. See [Undo](#undo).
+
+**Does it need an internet connection?**
+Only to look up English names for Japanese/Korean/Chinese titles, and only once per game, because results are saved in the db. Use `--offline` to skip the lookup.
+
+**Does it run on Windows?**
+Yes, Windows 10/11, Linux and macOS, with Python 3.8+ and no other dependencies. See [Installation](#installation).
 
 ## Notes
 
