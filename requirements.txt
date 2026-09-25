@@ -1,0 +1,3 @@
+# ps4-title-renamer uses only the Python standard library (Python 3.8+).
+# No third-party packages are required; this file exists so
+# `pip install -r requirements.txt` works as usual.

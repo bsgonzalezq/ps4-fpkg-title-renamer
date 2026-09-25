@@ -13,22 +13,84 @@ CUSA00900/                          Bloodborne/
 - Dry run by default, with a results log and a one-command undo
 - Output names are safe for exFAT/NTFS drives
 
-Requires Python 3.8+ and nothing else (standard library only). Linux, macOS and Windows.
+## Prerequisites
+
+| Requirement | Why |
+|---|---|
+| Python 3.8+ | Runs the script. Only the standard library is used, so there's nothing to `pip install` |
+| git | Clones and updates the repo |
+| Internet access | Only needed for the English-name lookup in `--build-db`. Use `--offline` to skip it |
+
+The prerequisites are also listed in [`requirements.txt`](requirements.txt), which names no packages, and checked by [`install_prereqs.sh`](install_prereqs.sh).
+
+## Installation
+
+### Linux / macOS
+
+```bash
+# 1. get git if you don't have it (Debian/Ubuntu shown; the script below handles other distros)
+sudo apt-get update && sudo apt-get install -y git
+
+# 2. clone the repo (it's private, so log in first: `gh auth login`, or use an SSH key)
+git clone https://github.com/bsgonzalezq/ps4-title-renamer.git
+cd ps4-title-renamer
+
+# 3. install / verify Python 3.8+ and git (apt, dnf, pacman, zypper or Homebrew)
+./install_prereqs.sh
+```
+
+`install_prereqs.sh` installs only what's missing, checks the Python version, and runs `pip install -r requirements.txt` if packages are ever added there.
+
+If you'd rather install by hand:
+
+| Distro | Command |
+|---|---|
+| Debian / Ubuntu | `sudo apt-get install -y python3 git` |
+| Fedora / RHEL | `sudo dnf install -y python3 git` |
+| Arch | `sudo pacman -S --needed python git` |
+| openSUSE | `sudo zypper install -y python3 git` |
+| macOS (Homebrew) | `brew install python git` |
+
+### Windows
+
+```powershell
+winget install -e --id Python.Python.3.12
+winget install -e --id Git.Git
+# reopen the terminal so both are on PATH, then:
+git clone https://github.com/bsgonzalezq/ps4-title-renamer.git
+cd ps4-title-renamer
+python ps4_rename.py --help
+```
+
+On Windows, use `python` where this README shows `python3`.
+
+### Updating
+
+```bash
+cd ps4-title-renamer
+git pull
+```
 
 ## Quick start
 
 ```bash
 cd /path/to/your/pkg/folders
-python3 ps4_rename.py --build-db     # 1. create ps4_titles.db from the .pkg files
-python3 ps4_rename.py                # 2. dry run: shows what would change
-python3 ps4_rename.py --apply        # 3. rename
-python3 ps4_rename.py --undo         #    revert, if needed
+python3 ~/ps4-title-renamer/ps4_rename.py --build-db   # 1. create ps4_titles.db from the .pkg files
+python3 ~/ps4-title-renamer/ps4_rename.py              # 2. dry run: shows what would change
+python3 ~/ps4-title-renamer/ps4_rename.py --apply      # 3. rename
+python3 ~/ps4-title-renamer/ps4_rename.py --undo       #    revert, if needed
 ```
 
 With no path the script works on the current directory. Pass a path to work elsewhere:
 
 ```bash
-python3 ps4_rename.py /media/usb/PS4 --apply
+python3 ~/ps4-title-renamer/ps4_rename.py /media/usb/PS4 --apply
+```
+
+Optional: to run it as just `ps4_rename.py`, link it into your PATH:
+
+```bash
+mkdir -p ~/.local/bin && ln -sf ~/ps4-title-renamer/ps4_rename.py ~/.local/bin/ps4_rename.py
 ```
 
 ## Options
