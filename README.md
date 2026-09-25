@@ -1,4 +1,4 @@
-# ps4-title-renamer
+# ps4-fpkg-title-renamer
 
 Renames PS4 PKG files to a consistent `<ID>_base` / `_patch` / `_<DLC>_dlc` scheme, puts each game in its own folder, and replaces title IDs (`CUSA00900`, `CHTM00777`, ...) with the game's title.
 
